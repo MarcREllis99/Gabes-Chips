@@ -1,0 +1,355 @@
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 3%;
+    --foreground: 45 80% 92%;
+    --card: 222 42% 7%;
+    --card-foreground: 45 80% 92%;
+    --popover: 222 42% 7%;
+    --popover-foreground: 45 80% 92%;
+    --primary: 44 78% 52%;
+    --primary-foreground: 225 50% 4%;
+    --secondary: 158 60% 15%;
+    --secondary-foreground: 45 80% 92%;
+    --muted: 222 32% 12%;
+    --muted-foreground: 220 14% 58%;
+    --accent: 158 60% 20%;
+    --accent-foreground: 45 80% 92%;
+    --destructive: 0 70% 50%;
+    --destructive-foreground: 45 80% 92%;
+    --border: 222 30% 15%;
+    --input: 222 32% 12%;
+    --ring: 44 78% 52%;
+    --radius: 0.5rem;
+
+    --deco-gold: 212, 175, 55;
+    --deco-champagne: 245, 231, 184;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    /* Stop iOS/Android from auto-inflating text in landscape */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    /* Matches the logo image's charcoal background (~#080808) with a
+       gentle center-top vignette mirroring the image, so the logo reads
+       as part of the page and its square edge disappears. */
+    background-color: #080808;
+    min-height: 100vh;
+    min-height: 100dvh;
+    /* Remove the grey flash when tapping buttons/links on mobile */
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Fixed vignette overlay keeps the glow behind the logo without the
+     iOS Safari jank that background-attachment: fixed causes. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background: radial-gradient(ellipse 85% 55% at 50% 8%, #0b0b0b 0%, rgba(0, 0, 0, 0) 60%);
+  }
+
+  /* Deco display type breathes with wide tracking */
+  .font-display {
+    letter-spacing: 0.06em;
+  }
+}
+
+@layer components {
+  /* ============ Cards: double-line deco frame ============ */
+  .casino-card {
+    @apply relative rounded-xl;
+    background: linear-gradient(168deg, #141c2e 0%, #0b101b 60%, #090d16 100%);
+    border: 1px solid rgba(var(--deco-gold), 0.22);
+    box-shadow:
+      0 10px 36px rgba(0, 0, 0, 0.5),
+      inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  }
+
+  /* Inner hairline frame — the classic deco double border */
+  .casino-card::after {
+    content: "";
+    position: absolute;
+    inset: 5px;
+    border: 1px solid rgba(var(--deco-gold), 0.09);
+    border-radius: calc(0.75rem - 4px);
+    pointer-events: none;
+  }
+
+  .gold-text {
+    @apply text-gold-400;
+  }
+
+  /* Champagne-to-bronze metallic text */
+  .gold-gradient {
+    background: linear-gradient(
+      180deg,
+      rgb(var(--deco-champagne)) 0%,
+      #ecd07a 30%,
+      #d4af37 55%,
+      #9a6f1f 100%
+    );
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.6));
+  }
+
+  /* Polished metallic gold sampled from the logo's spade:
+     champagne highlight → mid gold → deep bronze, with a sheen band. */
+  .logo-gold {
+    background: linear-gradient(
+      176deg,
+      #f8ecc0 0%,
+      #ebc97e 18%,
+      #d6ab55 33%,
+      #f4e3a6 45%,
+      #cf9a45 56%,
+      #b07c34 72%,
+      #8a5e2a 88%,
+      #6e4a20 100%
+    );
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.65));
+  }
+
+  .felt-bg {
+    background: radial-gradient(ellipse at center, #17593a 0%, #0d3321 65%, #06170f 100%);
+    border: 1px solid rgba(var(--deco-gold), 0.25);
+  }
+
+  .chip-display {
+    @apply inline-flex items-center gap-1.5 rounded-full px-3 py-1 font-semibold text-sm;
+    color: #ecd07a;
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0.65), rgba(24, 18, 4, 0.65));
+    border: 1px solid rgba(var(--deco-gold), 0.4);
+    box-shadow: inset 0 1px 0 rgba(var(--deco-gold), 0.12);
+  }
+
+  .btn-gold {
+    @apply text-black font-bold transition-all duration-200 active:scale-95;
+    background: linear-gradient(180deg, #f0d77e 0%, #d4af37 50%, #b88f24 100%);
+    box-shadow:
+      0 4px 18px rgba(var(--deco-gold), 0.25),
+      inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  }
+
+  .btn-casino {
+    @apply bg-casino-green hover:bg-casino-green-light text-white font-semibold transition-all duration-200;
+    border: 1px solid rgba(var(--deco-gold), 0.3);
+  }
+
+  /* Lobby code: engraved gold plaque */
+  .lobby-code {
+    @apply font-mono text-2xl font-bold tracking-[0.3em] rounded-lg px-4 py-2;
+    color: #ecd07a;
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0.75), rgba(22, 17, 4, 0.75));
+    border: 1px solid rgba(var(--deco-gold), 0.45);
+    box-shadow:
+      0 0 0 3px rgba(0, 0, 0, 0.5),
+      0 0 0 4px rgba(var(--deco-gold), 0.2),
+      inset 0 2px 6px rgba(0, 0, 0, 0.6);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  }
+
+  /* ============ Deco ornaments ============ */
+
+  /* Horizontal rule with a centered motif: <div class="deco-divider"><span>◆</span></div> */
+  .deco-divider {
+    @apply flex items-center gap-3;
+    color: rgba(var(--deco-gold), 0.75);
+  }
+  .deco-divider::before,
+  .deco-divider::after {
+    content: "";
+    height: 1px;
+    flex: 1;
+  }
+  .deco-divider::before {
+    background: linear-gradient(90deg, transparent, rgba(var(--deco-gold), 0.55));
+  }
+  .deco-divider::after {
+    background: linear-gradient(90deg, rgba(var(--deco-gold), 0.55), transparent);
+  }
+
+  /* Sunburst rays radiating from behind a hero element */
+  .deco-sunburst {
+    position: relative;
+    isolation: isolate;
+  }
+  .deco-sunburst::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: min(560px, 95vw);
+    height: 560px;
+    background: repeating-conic-gradient(
+      from -90deg,
+      rgba(var(--deco-gold), 0.06) 0deg 5deg,
+      transparent 5deg 11deg
+    );
+    -webkit-mask-image: radial-gradient(circle, black 0%, transparent 68%);
+    mask-image: radial-gradient(circle, black 0%, transparent 68%);
+    pointer-events: none;
+    z-index: -1;
+  }
+
+  /* Chevron accent strip for tops of feature sections */
+  .deco-chevrons {
+    height: 6px;
+    background: repeating-linear-gradient(
+      135deg,
+      rgba(var(--deco-gold), 0.5) 0 2px,
+      transparent 2px 8px
+    ),
+    repeating-linear-gradient(
+      45deg,
+      rgba(var(--deco-gold), 0.5) 0 2px,
+      transparent 2px 8px
+    );
+    border-radius: 2px;
+    opacity: 0.6;
+  }
+
+  /* Safe-area helpers for notched phones (viewport-fit=cover) */
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  /* Gradient hairline for the nav bottom edge */
+  .deco-nav {
+    border-bottom: 1px solid transparent;
+    border-image: linear-gradient(
+        90deg,
+        transparent 0%,
+        rgba(var(--deco-gold), 0.5) 50%,
+        transparent 100%
+      )
+      1;
+  }
+
+  /* ============ Blackjack table ============ */
+  .bj-table {
+    position: relative;
+    background: radial-gradient(ellipse at 50% 30%, #1d6b46 0%, #0f4129 55%, #082417 100%);
+    border: 2px solid rgba(var(--deco-gold), 0.5);
+    border-radius: 1.5rem 1.5rem 50% 50% / 1.5rem 1.5rem 18% 18%;
+    box-shadow:
+      0 0 0 10px #15100a,
+      0 0 0 12px rgba(var(--deco-gold), 0.3),
+      0 18px 50px rgba(0, 0, 0, 0.6),
+      inset 0 0 80px rgba(0, 0, 0, 0.45);
+  }
+
+  /* Dashed betting line following the table edge */
+  .bj-table::after {
+    content: "";
+    position: absolute;
+    inset: 12px;
+    border: 1px dashed rgba(var(--deco-gold), 0.22);
+    border-radius: 1rem 1rem 50% 50% / 1rem 1rem 18% 18%;
+    pointer-events: none;
+  }
+
+  /* ============ Playing cards ============ */
+  .deco-card {
+    @apply relative rounded-lg;
+    background: linear-gradient(165deg, #fdfaf1 0%, #f3ead2 100%);
+    border: 1.5px solid rgba(154, 111, 31, 0.55);
+    box-shadow:
+      0 8px 22px rgba(0, 0, 0, 0.55),
+      0 0 0 1px rgba(0, 0, 0, 0.35),
+      inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  }
+  .deco-card::after {
+    content: "";
+    position: absolute;
+    inset: 4px;
+    border: 1px solid rgba(154, 111, 31, 0.3);
+    border-radius: calc(0.5rem - 2px);
+    pointer-events: none;
+  }
+  .deco-card-highlight {
+    border-color: rgba(var(--deco-gold), 0.9);
+    box-shadow:
+      0 0 22px rgba(var(--deco-gold), 0.45),
+      0 8px 22px rgba(0, 0, 0, 0.55);
+  }
+  .deco-card-back {
+    @apply relative rounded-lg;
+    background:
+      repeating-linear-gradient(45deg, rgba(var(--deco-gold), 0.18) 0 2px, transparent 2px 11px),
+      repeating-linear-gradient(-45deg, rgba(var(--deco-gold), 0.18) 0 2px, transparent 2px 11px),
+      linear-gradient(165deg, #123724 0%, #081710 100%);
+    border: 1.5px solid rgba(var(--deco-gold), 0.45);
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.55);
+  }
+  .deco-card-back::after {
+    content: "";
+    position: absolute;
+    inset: 4px;
+    border: 1px solid rgba(var(--deco-gold), 0.25);
+    border-radius: calc(0.5rem - 2px);
+    pointer-events: none;
+  }
+}
+
+/* Coin animation */
+.coin-container {
+  perspective: 600px;
+}
+
+.coin {
+  transform-style: preserve-3d;
+  position: relative;
+}
+
+.coin-face {
+  backface-visibility: hidden;
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+}
+
+.coin-tails {
+  transform: rotateY(180deg);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #07090f;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(212, 175, 55, 0.25);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(212, 175, 55, 0.45);
+}
