@@ -76,8 +76,8 @@ export default function LeaderboardPage() {
       supabase.rpc("recent_games_feed"),
     ]);
 
-    if (leadersResult.data) setLeaders(leadersResult.data as LeaderRow[]);
-    if (recentResult.data) setRecent(recentResult.data as GameRow[]);
+    if (leadersResult) setLeaders(leadersResult as LeaderRow[]);
+    if (recentResult) setRecent(recentResult as GameRow[]);
     setLoading(false);
   }, [router, supabase]);
 
