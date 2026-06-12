@@ -73,7 +73,7 @@ export default function LeaderboardPage() {
 
     const [leadersResult, recentResult] = await Promise.all([
       supabase.rpc("leaderboard_stats"),
-      supabase.rpc("recent_games_feed", { p_limit: 15 }),
+      supabase.rpc("recent_games_feed"),
     ]);
 
     if (leadersResult.data) setLeaders(leadersResult.data as LeaderRow[]);
