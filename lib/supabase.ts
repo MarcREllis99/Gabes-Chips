@@ -30,7 +30,7 @@ export type Database = {
           status: "waiting" | "active" | "finished";
           max_players: number;
           buy_in: number;
-          game_type: "coin_flip" | "higher_lower" | "blackjack" | "texas_holdem" | "three_card" | "free_bet";
+          game_type: "coin_flip" | "higher_lower" | "blackjack" | "texas_holdem" | "three_card" | "free_bet" | "euchre";
           dealer_id: string | null;
           created_at: string;
         };
@@ -42,14 +42,14 @@ export type Database = {
           status?: "waiting" | "active" | "finished";
           max_players: number;
           buy_in: number;
-          game_type?: "coin_flip" | "higher_lower" | "blackjack" | "texas_holdem" | "three_card" | "free_bet";
+          game_type?: "coin_flip" | "higher_lower" | "blackjack" | "texas_holdem" | "three_card" | "free_bet" | "euchre";
           dealer_id?: string | null;
           created_at?: string;
         };
         Update: {
           name?: string;
           status?: "waiting" | "active" | "finished";
-          game_type?: "coin_flip" | "higher_lower" | "blackjack" | "texas_holdem" | "three_card" | "free_bet";
+          game_type?: "coin_flip" | "higher_lower" | "blackjack" | "texas_holdem" | "three_card" | "free_bet" | "euchre";
           dealer_id?: string | null;
         };
       };
@@ -72,7 +72,7 @@ export type Database = {
         Row: {
           id: string;
           lobby_id: string;
-          game_type: "coin_flip" | "higher_lower" | "blackjack" | "texas_holdem" | "three_card" | "free_bet";
+          game_type: "coin_flip" | "higher_lower" | "blackjack" | "texas_holdem" | "three_card" | "free_bet" | "euchre";
           state: Record<string, unknown>;
           winner_id: string | null;
           created_at: string;
@@ -80,7 +80,7 @@ export type Database = {
         Insert: {
           id?: string;
           lobby_id: string;
-          game_type: "coin_flip" | "higher_lower" | "blackjack" | "texas_holdem" | "three_card" | "free_bet";
+          game_type: "coin_flip" | "higher_lower" | "blackjack" | "texas_holdem" | "three_card" | "free_bet" | "euchre";
           state?: Record<string, unknown>;
           winner_id?: string | null;
           created_at?: string;

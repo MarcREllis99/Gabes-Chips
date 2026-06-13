@@ -7,7 +7,7 @@ import { createClient } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Spade, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 export default function SignupPage() {
   const [email, setEmail] = useState("");
@@ -49,11 +49,14 @@ export default function SignupPage() {
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
       <div className="w-full max-w-md">
-        <div className="text-center mb-8 deco-sunburst py-4">
-          <div className="inline-flex items-center justify-center w-16 h-16 rotate-45 bg-casino-green border border-gold-600/50 mb-6 shadow-[0_0_24px_rgba(212,175,55,0.25)]">
-            <Spade className="w-8 h-8 text-gold-400 -rotate-45" />
-          </div>
-          <h1 className="font-display text-4xl font-bold gold-gradient mb-3 uppercase">
+        <div className="text-center mb-8 py-4">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/logo.png"
+            alt="Gabe's Chips"
+            className="w-28 h-28 object-contain mx-auto mb-4"
+          />
+          <h1 className="font-display text-4xl sm:text-5xl font-black logo-gold mb-3 uppercase">
             Gabe&apos;s Chips
           </h1>
           <div className="deco-divider max-w-[240px] mx-auto mb-3">

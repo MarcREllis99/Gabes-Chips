@@ -45,25 +45,13 @@
 
   body {
     @apply bg-background text-foreground font-sans antialiased;
-    /* Matches the logo image's charcoal background (~#080808) with a
-       gentle center-top vignette mirroring the image, so the logo reads
-       as part of the page and its square edge disappears. */
+    /* Uniform near-black matched to the logo image's background (~#080808)
+       so the logo blends seamlessly. No gradient/pattern — completely flat. */
     background-color: #080808;
     min-height: 100vh;
     min-height: 100dvh;
     /* Remove the grey flash when tapping buttons/links on mobile */
     -webkit-tap-highlight-color: transparent;
-  }
-
-  /* Fixed vignette overlay keeps the glow behind the logo without the
-     iOS Safari jank that background-attachment: fixed causes. */
-  body::before {
-    content: "";
-    position: fixed;
-    inset: 0;
-    z-index: -1;
-    pointer-events: none;
-    background: radial-gradient(ellipse 85% 55% at 50% 8%, #0b0b0b 0%, rgba(0, 0, 0, 0) 60%);
   }
 
   /* Deco display type breathes with wide tracking */

@@ -10,6 +10,7 @@ import { BlackjackGame } from "@/components/game/blackjack-game";
 import { TexasHoldemGame } from "@/components/game/texas-holdem-game";
 import { ThreeCardGame } from "@/components/game/three-card-game";
 import { FreeBetGame } from "@/components/game/free-bet-game";
+import { EuchreGame } from "@/components/game/euchre-game";
 import { Loader2 } from "lucide-react";
 import type { Database } from "@/lib/supabase";
 
@@ -150,6 +151,18 @@ export default function GamePage() {
         )}
         {game.game_type === "free_bet" && (
           <FreeBetGame
+            game={game}
+            lobby={lobby}
+            players={players}
+            currentUser={currentUser}
+            currentProfile={currentProfile}
+            isHost={isHost}
+            pot={pot}
+            onGameEnd={() => router.push("/")}
+          />
+        )}
+        {game.game_type === "euchre" && (
+          <EuchreGame
             game={game}
             lobby={lobby}
             players={players}

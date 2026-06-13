@@ -66,8 +66,16 @@ export default function HomePage() {
   }, [loadData]);
 
   const openCreateFor = (gameId: GameType) => {
+    const info = GAME_INFO[gameId];
     setSelectedGame(gameId);
-    setMaxPlayers(GAME_INFO[gameId].maxPlayers > 2 ? 4 : 2);
+    // Fixed-count games lock to their required size; ranged games default to 4.
+    setMaxPlayers(
+      info.minPlayers === info.maxPlayers
+        ? info.maxPlayers
+        : info.maxPlayers > 2
+          ? 4
+          : 2
+    );
     setShowCreate(true);
   };
 
@@ -147,7 +155,7 @@ export default function HomePage() {
       <Navbar />
       <main className="max-w-6xl mx-auto px-4 py-8">
         {/* Hero */}
-        <div className="text-center mb-10 deco-sunburst py-6">
+        <div className="text-center mb-10 py-6">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src="/logo.png"
@@ -300,7 +308,11 @@ export default function HomePage() {
 
             <div className="space-y-2">
               <Label>Max Players</Label>
-              {selectedGame && GAME_INFO[selectedGame].maxPlayers > 2 ? (
+              {selectedGame && GAME_INFO[selectedGame].minPlayers === GAME_INFO[selectedGame].maxPlayers ? (
+                <p className="text-sm text-muted-foreground py-1.5">
+                  {GAME_INFO[selectedGame].maxPlayers} players — {GAME_INFO[selectedGame].maxPlayers === 4 ? "2 teams" : "head-to-head"} (fixed)
+                </p>
+              ) : selectedGame && GAME_INFO[selectedGame].maxPlayers > 2 ? (
                 <div className="flex items-center gap-2">
                   <Button
                     type="button"

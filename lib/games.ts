@@ -4,7 +4,8 @@ export type GameType =
   | "blackjack"
   | "texas_holdem"
   | "three_card"
-  | "free_bet";
+  | "free_bet"
+  | "euchre";
 
 export interface GameInfo {
   name: string;
@@ -63,6 +64,14 @@ export const GAME_INFO: Record<GameType, GameInfo> = {
     limit: "1–7 players vs the house",
     minPlayers: 1,
     maxPlayers: 7,
+  },
+  euchre: {
+    name: "Euchre",
+    emoji: "🃏",
+    desc: "Classic 2-on-2 trick game with bowers — first team to 10 wins.",
+    limit: "4 players (2 teams)",
+    minPlayers: 4,
+    maxPlayers: 4,
   },
 };
 
