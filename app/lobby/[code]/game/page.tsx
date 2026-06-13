@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase";
 import { Navbar } from "@/components/navbar";
@@ -11,12 +11,23 @@ import { TexasHoldemGame } from "@/components/game/texas-holdem-game";
 import { ThreeCardGame } from "@/components/game/three-card-game";
 import { FreeBetGame } from "@/components/game/free-bet-game";
 import { EuchreGame } from "@/components/game/euchre-game";
-import { Loader2 } from "lucide-react";
+import { GAME_INFO, type GameType } from "@/lib/games";
+import { Loader2, LogOut } from "lucide-react";
 import type { Database } from "@/lib/supabase";
 
 type Lobby = Database["public"]["Tables"]["lobbies"]["Row"];
 type Game = Database["public"]["Tables"]["games"]["Row"];
 type Profile = Database["public"]["Tables"]["profiles"]["Row"];
+
+const GAME_COMPONENTS = {
+  coin_flip: CoinFlipGame,
+  higher_lower: HigherLowerGame,
+  blackjack: BlackjackGame,
+  texas_holdem: TexasHoldemGame,
+  three_card: ThreeCardGame,
+  free_bet: FreeBetGame,
+  euchre: EuchreGame,
+} as const;
 
 export default function GamePage() {
   const params = useParams();
@@ -28,9 +39,11 @@ export default function GamePage() {
   const [currentUser, setCurrentUser] = useState<{ id: string } | null>(null);
   const [currentProfile, setCurrentProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [leaving, setLeaving] = useState(false);
 
   const router = useRouter();
   const supabase = createClient();
+  const gameIdRef = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -54,6 +67,7 @@ export default function GamePage() {
     ]);
 
     setGame(gameResult.data);
+    gameIdRef.current = gameResult.data?.id ?? null;
 
     if (lpResult.data) {
       const profileResults = await Promise.all(
@@ -71,6 +85,40 @@ export default function GamePage() {
     load();
   }, [load]);
 
+  // Keep this screen in step with continuation: when the host resets the
+  // lobby (status → waiting) head back to the waiting room; when a brand-new
+  // game is dealt for this lobby, swap into it.
+  useEffect(() => {
+    if (!lobby) return;
+    const channel = supabase
+      .channel(`gamepage-${lobby.id}`)
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "lobbies", filter: `id=eq.${lobby.id}` },
+        (payload) => {
+          if ((payload.new as Lobby).status === "waiting") {
+            router.push(`/lobby/${code}`);
+          }
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "games", filter: `lobby_id=eq.${lobby.id}` },
+        (payload) => {
+          const newId = (payload.new as Game).id;
+          if (newId && newId !== gameIdRef.current) load();
+        }
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [lobby, supabase, router, code, load]);
+
+  const handleLeave = async () => {
+    if (!window.confirm("Leave this game? You forfeit your stake in the current hand. You'll go back to the game menu.")) return;
+    setLeaving(true);
+    router.push("/");
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -85,12 +133,31 @@ export default function GamePage() {
   const stake = ((game.state as Record<string, unknown> | null)?.stake as number) ?? 0;
   const pot = stake * players.length;
 
+  const GameComponent = GAME_COMPONENTS[game.game_type as GameType];
+
   return (
     <>
       <Navbar />
-      <main className="max-w-2xl mx-auto px-4 py-6">
-        {game.game_type === "coin_flip" && (
-          <CoinFlipGame
+      <main className="max-w-2xl mx-auto px-4 py-4 pb-safe">
+        {/* In-game toolbar: leave for another game */}
+        <div className="flex items-center justify-between mb-4">
+          <span className="text-sm text-muted-foreground truncate">
+            {GAME_INFO[game.game_type as GameType]?.emoji} {lobby.name}
+          </span>
+          <button
+            onClick={handleLeave}
+            disabled={leaving}
+            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-destructive transition-colors"
+            title="Leave for another game"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            Leave
+          </button>
+        </div>
+
+        {GameComponent && (
+          <GameComponent
+            key={game.id}
             game={game}
             lobby={lobby}
             players={players}
@@ -98,79 +165,7 @@ export default function GamePage() {
             currentProfile={currentProfile}
             isHost={isHost}
             pot={pot}
-            onGameEnd={() => router.push("/")}
-          />
-        )}
-        {game.game_type === "higher_lower" && (
-          <HigherLowerGame
-            game={game}
-            lobby={lobby}
-            players={players}
-            currentUser={currentUser}
-            currentProfile={currentProfile}
-            isHost={isHost}
-            pot={pot}
-            onGameEnd={() => router.push("/")}
-          />
-        )}
-        {game.game_type === "blackjack" && (
-          <BlackjackGame
-            game={game}
-            lobby={lobby}
-            players={players}
-            currentUser={currentUser}
-            currentProfile={currentProfile}
-            isHost={isHost}
-            pot={pot}
-            onGameEnd={() => router.push("/")}
-          />
-        )}
-        {game.game_type === "texas_holdem" && (
-          <TexasHoldemGame
-            game={game}
-            lobby={lobby}
-            players={players}
-            currentUser={currentUser}
-            currentProfile={currentProfile}
-            isHost={isHost}
-            pot={pot}
-            onGameEnd={() => router.push("/")}
-          />
-        )}
-        {game.game_type === "three_card" && (
-          <ThreeCardGame
-            game={game}
-            lobby={lobby}
-            players={players}
-            currentUser={currentUser}
-            currentProfile={currentProfile}
-            isHost={isHost}
-            pot={pot}
-            onGameEnd={() => router.push("/")}
-          />
-        )}
-        {game.game_type === "free_bet" && (
-          <FreeBetGame
-            game={game}
-            lobby={lobby}
-            players={players}
-            currentUser={currentUser}
-            currentProfile={currentProfile}
-            isHost={isHost}
-            pot={pot}
-            onGameEnd={() => router.push("/")}
-          />
-        )}
-        {game.game_type === "euchre" && (
-          <EuchreGame
-            game={game}
-            lobby={lobby}
-            players={players}
-            currentUser={currentUser}
-            currentProfile={currentProfile}
-            isHost={isHost}
-            pot={pot}
-            onGameEnd={() => router.push("/")}
+            onGameEnd={() => router.push(`/lobby/${code}`)}
           />
         )}
       </main>

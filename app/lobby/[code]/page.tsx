@@ -12,9 +12,9 @@ import { Toaster } from "@/components/ui/toaster";
 import { useToast } from "@/components/ui/use-toast";
 import {
   Copy, Check, Users, Crown, Loader2,
-  DoorOpen, Play, Clock, Trash2, Dices,
+  DoorOpen, Play, Clock, Trash2, Dices, RotateCcw,
 } from "lucide-react";
-import { GAME_INFO } from "@/lib/games";
+import { GAME_INFO, GAME_LIST, type GameType } from "@/lib/games";
 import type { Database } from "@/lib/supabase";
 
 type Lobby = Database["public"]["Tables"]["lobbies"]["Row"];
@@ -40,6 +40,7 @@ export default function LobbyPage() {
   const [joining, setJoining] = useState(false);
   const [starting, setStarting] = useState(false);
   const [disbanding, setDisbanding] = useState(false);
+  const [replaying, setReplaying] = useState(false);
   const [stakeInput, setStakeInput] = useState("100");
   const [spinning, setSpinning] = useState(false);
   const [spinIndex, setSpinIndex] = useState(0);
@@ -247,6 +248,20 @@ export default function LobbyPage() {
     router.push("/");
   };
 
+  // Post-game continuation: bring the lobby back to the waiting room for
+  // another game (any type) with the same group — chips carry via balance.
+  const handlePlayAgain = async (gameType: GameType) => {
+    if (!lobby || !isHost) return;
+    setReplaying(true);
+    const { error } = await supabase.rpc("reset_lobby", { p_lobby_id: lobby.id, p_game_type: gameType });
+    if (error) {
+      toast({ title: "Couldn't start another game", description: error.message, variant: "destructive" });
+      setReplaying(false);
+      return;
+    }
+    setReplaying(false);
+  };
+
   const handleStartGame = async () => {
     if (!lobby || !isHost) return;
     if (players.length < minPlayers) {
@@ -337,7 +352,11 @@ export default function LobbyPage() {
 
           <div className="flex items-center gap-2 p-3 bg-muted/30 rounded-lg text-sm text-muted-foreground">
             <Clock className="w-4 h-4 text-gold-500 shrink-0" />
-            <span>Waiting for players… The host hands out chips and starts the game.</span>
+            <span>
+              {lobby.status === "finished"
+                ? "Game over — your chips carried over. Play another game with this group, or head out."
+                : "Waiting for players… The host hands out chips and starts the game."}
+            </span>
           </div>
         </div>
 
@@ -391,8 +410,53 @@ export default function LobbyPage() {
           </div>
         </div>
 
+        {/* Post-game continuation: play another game with the same group */}
+        {lobby.status === "finished" && (
+          <div className="casino-card p-6 mb-6">
+            <h2 className="font-serif text-lg font-semibold mb-1 flex items-center gap-2">
+              <RotateCcw className="w-4 h-4 text-gold-500" />
+              Play Another Game
+            </h2>
+            <p className="text-xs text-muted-foreground mb-4">
+              Everyone keeps their chips. {isHost ? "Pick the next game for this group:" : "The host is choosing the next game…"}
+            </p>
+
+            {isHost ? (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {GAME_LIST.map((g) => (
+                  <button
+                    key={g.id}
+                    type="button"
+                    onClick={() => handlePlayAgain(g.id)}
+                    disabled={replaying}
+                    className="casino-card p-4 text-left hover:border-gold-500/50 transition-all disabled:opacity-50"
+                  >
+                    <div className="text-2xl mb-1">{g.emoji}</div>
+                    <div className="font-display text-sm font-bold uppercase">{g.name}</div>
+                    <div className="text-[11px] text-muted-foreground mt-0.5">{g.limit}</div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="flex items-center justify-center gap-2 text-muted-foreground text-sm py-4">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Waiting for the host…
+              </div>
+            )}
+
+            <Button
+              variant="outline"
+              size="lg"
+              className="w-full mt-4"
+              onClick={() => router.push("/")}
+            >
+              <DoorOpen className="w-4 h-4 mr-2" /> Leave for the Menu
+            </Button>
+          </div>
+        )}
+
         {/* Dealer Roulette — for blackjack & free bet, visible to everyone */}
-        {isDealerGame && (
+        {lobby.status === "waiting" && isDealerGame && (
           <div className="casino-card p-6 mb-6">
             <h2 className="font-serif text-lg font-semibold mb-1 flex items-center gap-2">
               <Dices className="w-4 h-4 text-gold-500" />
@@ -464,7 +528,7 @@ export default function LobbyPage() {
         )}
 
         {/* Game selection + actions */}
-        {isHost && (
+        {lobby.status === "waiting" && isHost && (
           <div className="casino-card p-6 mb-6">
             <h2 className="font-serif text-lg font-semibold mb-4 flex items-center gap-2">
               <Crown className="w-4 h-4 text-gold-500" />
@@ -598,6 +662,7 @@ export default function LobbyPage() {
         )}
 
         {/* Join / Leave */}
+        {lobby.status === "waiting" && (
         <div className="flex gap-3">
           {!isInLobby && !isFull && (
             <Button
@@ -620,6 +685,7 @@ export default function LobbyPage() {
             </Button>
           )}
         </div>
+        )}
       </main>
 
       <Toaster />

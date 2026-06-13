@@ -32,6 +32,7 @@ export type Database = {
           buy_in: number;
           game_type: "coin_flip" | "higher_lower" | "blackjack" | "texas_holdem" | "three_card" | "free_bet" | "euchre";
           dealer_id: string | null;
+          carry_pot: number;
           created_at: string;
         };
         Insert: {
