@@ -5,7 +5,8 @@ import { createClient } from "@/lib/supabase";
 import { PlayerAvatar } from "@/components/player-avatar";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/toaster";
-import { Loader2, Trophy, Plus, SkipForward } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
+import { Loader2, Trophy, Plus, SkipForward, Megaphone } from "lucide-react";
 import { formatChips } from "@/lib/utils";
 import {
   type WildsState,
@@ -142,9 +143,12 @@ export function GabesWildsGame({
   const [pendingWildId, setPendingWildId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [iCalled, setICalled] = useState(false);
   const settledRef = useRef(false);
+  const channelRef = useRef<ReturnType<ReturnType<typeof createClient>["channel"]> | null>(null);
 
   const supabase = createClient();
+  const { toast } = useToast();
   const myId = currentUser.id;
   const nameOf = (pid: string) => players.find((p) => p.id === pid)?.username ?? "Player";
 
@@ -175,7 +179,7 @@ export function GabesWildsGame({
 
   useEffect(() => {
     const channel = supabase
-      .channel(`game-gw-${game.id}`)
+      .channel(`game-gw-${game.id}`, { config: { broadcast: { self: false } } })
       .on(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "games", filter: `id=eq.${game.id}` },
@@ -184,9 +188,32 @@ export function GabesWildsGame({
           if (Array.isArray(next?.drawPile)) setState(next);
         }
       )
+      // "One More Wild" call — a live notification that doesn't touch game state
+      .on("broadcast", { event: "wilds_call" }, ({ payload }) => {
+        toast({
+          title: "📣 One More Wild!",
+          description: `${(payload as { name?: string })?.name ?? "A player"} has just one card left!`,
+        });
+      })
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [game.id, supabase]);
+    channelRef.current = channel;
+    return () => { supabase.removeChannel(channel); channelRef.current = null; };
+  }, [game.id, supabase, toast]);
+
+  // Reset the call prompt whenever I'm no longer down to one card
+  useEffect(() => {
+    if ((state?.hands[myId]?.length ?? 0) !== 1) setICalled(false);
+  }, [state, myId]);
+
+  const callOneMore = () => {
+    channelRef.current?.send({
+      type: "broadcast",
+      event: "wilds_call",
+      payload: { name: nameOf(myId) },
+    });
+    setICalled(true);
+    toast({ title: "📣 You called One More Wild!", description: "Everyone's been notified." });
+  };
 
   // Host pays the winner once the hand ends
   useEffect(() => {
@@ -254,6 +281,19 @@ export function GabesWildsGame({
           {" · "}First to empty their hand wins
         </p>
       </div>
+
+      {/* "One More Wild" call — appears whenever you're down to your last card */}
+      {myIndex >= 0 && state.phase === "playing" && myHand.length === 1 && !iCalled && (
+        <Button
+          variant="gold"
+          size="lg"
+          className="w-full animate-pulse-gold"
+          onClick={callOneMore}
+        >
+          <Megaphone className="w-5 h-5 mr-2" />
+          One More Wild
+        </Button>
+      )}
 
       {/* Players strip */}
       <div className="casino-card p-3">
