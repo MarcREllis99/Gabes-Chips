@@ -5,7 +5,8 @@ export type GameType =
   | "texas_holdem"
   | "three_card"
   | "free_bet"
-  | "euchre";
+  | "euchre"
+  | "gabes_wilds";
 
 export interface GameInfo {
   name: string;
@@ -72,6 +73,14 @@ export const GAME_INFO: Record<GameType, GameInfo> = {
     limit: "4 players (2 teams)",
     minPlayers: 4,
     maxPlayers: 4,
+  },
+  gabes_wilds: {
+    name: "Gabe's Wilds",
+    emoji: "🌈",
+    desc: "Match by color or number, sling skips & wilds — first to empty their hand takes the pot.",
+    limit: "2–8 players",
+    minPlayers: 2,
+    maxPlayers: 8,
   },
 };
 

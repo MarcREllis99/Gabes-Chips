@@ -11,6 +11,7 @@ import { TexasHoldemGame } from "@/components/game/texas-holdem-game";
 import { ThreeCardGame } from "@/components/game/three-card-game";
 import { FreeBetGame } from "@/components/game/free-bet-game";
 import { EuchreGame } from "@/components/game/euchre-game";
+import { GabesWildsGame } from "@/components/game/gabes-wilds-game";
 import { GAME_INFO, type GameType } from "@/lib/games";
 import { Loader2, LogOut } from "lucide-react";
 import type { Database } from "@/lib/supabase";
@@ -27,6 +28,7 @@ const GAME_COMPONENTS = {
   three_card: ThreeCardGame,
   free_bet: FreeBetGame,
   euchre: EuchreGame,
+  gabes_wilds: GabesWildsGame,
 } as const;
 
 export default function GamePage() {
