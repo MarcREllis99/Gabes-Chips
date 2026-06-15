@@ -296,7 +296,7 @@ export function GabesWildsGame({
           </div>
           <button
             type="button"
-            onClick={() => isMyTurn && !state.drewThisTurn && act(drawCard)}
+            onClick={() => isMyTurn && !state.drewThisTurn && act(() => drawCard(state))}
             disabled={!isMyTurn || state.drewThisTurn || busy || state.phase !== "playing"}
             className="flex flex-col items-center gap-1 disabled:opacity-60"
           >
@@ -358,12 +358,12 @@ export function GabesWildsGame({
                 Your turn — play a card{!iHavePlayable && !state.drewThisTurn ? " or draw" : ""}
               </p>
               {state.drewThisTurn && (
-                <Button variant="casino" size="lg" className="w-full" onClick={() => act(passTurn)} disabled={busy}>
+                <Button variant="casino" size="lg" className="w-full" onClick={() => act(() => passTurn(state))} disabled={busy}>
                   <SkipForward className="w-4 h-4 mr-2" /> Pass
                 </Button>
               )}
               {!iHavePlayable && !state.drewThisTurn && (
-                <Button variant="gold" size="lg" className="w-full" onClick={() => act(drawCard)} disabled={busy}>
+                <Button variant="gold" size="lg" className="w-full" onClick={() => act(() => drawCard(state))} disabled={busy}>
                   <Plus className="w-4 h-4 mr-2" /> Draw a card
                 </Button>
               )}
