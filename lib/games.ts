@@ -6,7 +6,8 @@ export type GameType =
   | "three_card"
   | "free_bet"
   | "euchre"
-  | "gabes_wilds";
+  | "gabes_wilds"
+  | "war";
 
 export interface GameInfo {
   name: string;
@@ -81,6 +82,14 @@ export const GAME_INFO: Record<GameType, GameInfo> = {
     limit: "2–8 players",
     minPlayers: 2,
     maxPlayers: 8,
+  },
+  war: {
+    name: "War",
+    emoji: "⚔️",
+    desc: "High card wins each battle — ties mean war. First to take all 52 cards takes the pot.",
+    limit: "2 players",
+    minPlayers: 2,
+    maxPlayers: 2,
   },
 };
 

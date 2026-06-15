@@ -12,6 +12,7 @@ import { ThreeCardGame } from "@/components/game/three-card-game";
 import { FreeBetGame } from "@/components/game/free-bet-game";
 import { EuchreGame } from "@/components/game/euchre-game";
 import { GabesWildsGame } from "@/components/game/gabes-wilds-game";
+import { WarGame } from "@/components/game/war-game";
 import { GAME_INFO, type GameType } from "@/lib/games";
 import { Loader2, LogOut } from "lucide-react";
 import type { Database } from "@/lib/supabase";
@@ -29,6 +30,7 @@ const GAME_COMPONENTS = {
   free_bet: FreeBetGame,
   euchre: EuchreGame,
   gabes_wilds: GabesWildsGame,
+  war: WarGame,
 } as const;
 
 export default function GamePage() {
