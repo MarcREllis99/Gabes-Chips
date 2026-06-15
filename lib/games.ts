@@ -69,7 +69,7 @@ export const GAME_INFO: Record<GameType, GameInfo> = {
   },
   euchre: {
     name: "Euchre",
-    emoji: "🃏",
+    emoji: "🂫",
     desc: "Classic 2-on-2 trick game with bowers — first team to 10 wins.",
     limit: "4 players (2 teams)",
     minPlayers: 4,
