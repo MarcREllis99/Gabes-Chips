@@ -5,6 +5,7 @@ import { useRouter, useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase";
 import { Navbar } from "@/components/navbar";
 import { PlayerAvatar } from "@/components/player-avatar";
+import { ChipTracker } from "@/components/chip-tracker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -316,6 +317,11 @@ export default function LobbyPage() {
   }
 
   if (!lobby) return null;
+
+  // Chip Tracker rooms render their own ledger UI instead of a game lobby
+  if (lobby.game_type === "chip_tracker" && currentUser) {
+    return <ChipTracker lobby={lobby} currentUserId={currentUser.id} />;
+  }
 
   return (
     <>

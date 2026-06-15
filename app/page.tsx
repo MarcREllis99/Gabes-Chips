@@ -40,6 +40,12 @@ export default function HomePage() {
   const [maxPlayers, setMaxPlayers] = useState(4);
   const [createLoading, setCreateLoading] = useState(false);
 
+  // Chip Tracker
+  const [showTracker, setShowTracker] = useState(false);
+  const [trackerGame, setTrackerGame] = useState("Poker");
+  const [trackerBuyIn, setTrackerBuyIn] = useState("500");
+  const [trackerLoading, setTrackerLoading] = useState(false);
+
   const router = useRouter();
   const supabase = createClient();
   const { toast } = useToast();
@@ -113,20 +119,54 @@ export default function HomePage() {
     router.push(`/lobby/${code}`);
   };
 
+  const handleCreateTracker = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !trackerGame.trim()) return;
+    setTrackerLoading(true);
+    const code = generateLobbyCode();
+
+    const { data: lobby, error } = await supabase
+      .from("lobbies")
+      .insert({
+        name: `${trackerGame.trim()} — Chip Tracker`,
+        code,
+        host_id: user.id,
+        max_players: 8,
+        buy_in: Math.max(0, Number(trackerBuyIn) || 0),
+        status: "tracking",
+        game_type: "chip_tracker",
+      })
+      .select()
+      .single();
+
+    if (error || !lobby) {
+      toast({ title: "Couldn't start the tracker", description: error?.message, variant: "destructive" });
+      setTrackerLoading(false);
+      return;
+    }
+
+    await supabase.from("lobby_players").insert({ lobby_id: lobby.id, user_id: user.id });
+
+    setTrackerLoading(false);
+    setShowTracker(false);
+    router.push(`/lobby/${code}`);
+  };
+
   const handleJoinByCode = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!joinCode.trim()) return;
     setJoinLoading(true);
 
+    // Find the room by code regardless of status (covers Chip Tracker rooms too)
     const { data: lobby } = await supabase
       .from("lobbies")
       .select("*")
       .eq("code", joinCode.toUpperCase().trim())
-      .eq("status", "waiting")
+      .in("status", ["waiting", "tracking"])
       .single();
 
     if (!lobby) {
-      toast({ title: "Lobby not found", description: "Check the code and try again.", variant: "destructive" });
+      toast({ title: "Room not found", description: "Check the code and try again.", variant: "destructive" });
       setJoinLoading(false);
       return;
     }
@@ -174,6 +214,29 @@ export default function HomePage() {
           <p className="text-muted-foreground text-lg tracking-wide">
             Anywhere you are.
           </p>
+        </div>
+
+        {/* Chip Tracker */}
+        <div className="mb-8">
+          <div className="deco-divider max-w-sm mx-auto mb-4">
+            <span className="font-serif text-sm text-muted-foreground tracking-widest uppercase px-2">Chip Tracker</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowTracker(true)}
+            className="casino-card w-full p-5 flex items-center gap-4 text-left hover:border-gold-500/50 transition-all duration-200 group"
+          >
+            <div className="text-3xl shrink-0">🪙</div>
+            <div className="min-w-0 flex-1">
+              <div className="font-display text-lg font-bold uppercase group-hover:text-gold-400 transition-colors">
+                Track Chips for Your Own Game
+              </div>
+              <p className="text-sm text-muted-foreground mt-0.5">
+                Playing with real cards? Keep score here — send &amp; receive chips with friends.
+              </p>
+            </div>
+            <span className="text-gold-400 shrink-0 text-sm font-semibold hidden sm:block">Start →</span>
+          </button>
         </div>
 
         {/* Game menu */}
@@ -355,6 +418,69 @@ export default function HomePage() {
                 <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Creating...</>
               ) : (
                 "Create Lobby"
+              )}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Chip Tracker modal */}
+      <Dialog open={showTracker} onOpenChange={setShowTracker}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-serif text-2xl logo-gold">Chip Tracker</DialogTitle>
+            <DialogDescription>
+              What are you playing? We&apos;ll set up a room so you can send &amp; receive chips
+              while you play with your own cards.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleCreateTracker} className="space-y-4 mt-2">
+            <div className="space-y-2">
+              <Label>Game</Label>
+              <div className="flex flex-wrap gap-2">
+                {["Poker", "Blackjack", "Euchre", "Rummy", "Hearts", "Spades"].map((g) => (
+                  <Button
+                    key={g}
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setTrackerGame(g)}
+                    className={trackerGame === g ? "text-gold-400 border border-gold-500/40 bg-gold-500/10" : "text-muted-foreground"}
+                  >
+                    {g}
+                  </Button>
+                ))}
+              </div>
+              <Input
+                placeholder="Or type a game…"
+                value={trackerGame}
+                onChange={(e) => setTrackerGame(e.target.value)}
+                maxLength={30}
+                required
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Starting chips (each player&apos;s buy-in)</Label>
+              <Input
+                type="number"
+                inputMode="numeric"
+                min={0}
+                value={trackerBuyIn}
+                onChange={(e) => setTrackerBuyIn(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Just a reference for how many chips you&apos;re each playing with. Chips move only when you
+                send them — balances are your real running total.
+              </p>
+            </div>
+
+            <Button type="submit" variant="gold" size="lg" className="w-full" disabled={trackerLoading || !trackerGame.trim()}>
+              {trackerLoading ? (
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Setting up…</>
+              ) : (
+                "Start Tracking"
               )}
             </Button>
           </form>
