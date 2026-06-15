@@ -76,7 +76,7 @@ export const GAME_INFO: Record<GameType, GameInfo> = {
   },
   gabes_wilds: {
     name: "Gabe's Wilds",
-    emoji: "🌈",
+    emoji: "🔴🟡🟢🔵",
     desc: "Match by color or number, sling skips & wilds — first to empty their hand takes the pot.",
     limit: "2–8 players",
     minPlayers: 2,
