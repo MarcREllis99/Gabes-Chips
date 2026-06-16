@@ -107,6 +107,7 @@ export type Database = {
           from_user: string;
           to_user: string;
           amount: number;
+          note: string | null;
           created_at: string;
         };
         Insert: {
@@ -114,6 +115,7 @@ export type Database = {
           from_user: string;
           to_user: string;
           amount: number;
+          note?: string | null;
         };
         Update: Record<string, never>;
       };

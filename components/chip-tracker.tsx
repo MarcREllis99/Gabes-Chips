@@ -32,6 +32,7 @@ interface HandSnapshot {
   bets: Record<string, number>;
   results: Record<string, Outcome>;
   marked: string[];
+  logCount?: number; // # of hand-history rows inserted at payout (to undo)
 }
 interface TrackerState {
   phase: HandPhase;
@@ -44,6 +45,7 @@ interface TransferRow {
   from_user: string;
   to_user: string;
   amount: number;
+  note: string | null;
   created_at: string;
 }
 
@@ -185,6 +187,7 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
           setDealerId(l.dealer_id);
           setHand((l.tracker_state as unknown as TrackerState) ?? { phase: "idle", results: {}, marked: [] });
           loadMembers();
+          loadTransfers();
         })
       .on("broadcast", { event: "transfer" }, ({ payload }) => {
         const p = payload as { from?: string; to?: string; cents?: number };
@@ -368,21 +371,33 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
     };
 
     const updates: Record<string, Record<string, number>> = {};
+    const log: { from_user: string; to_user: string; amount: number; note: string }[] = [];
     let dealerDelta = 0;
     for (const m of others) {
       if (m.betCents <= 0) continue;
       const bet = m.betCents;
       const res = hand.results[m.user_id];
       let pTotal = totalCents(m.chipCounts); // already minus the escrowed bet
-      if (res === "lose") { dealerDelta += bet; }
-      else if (res === "win") { pTotal += 2 * bet; dealerDelta -= bet; }
-      else if (res === "bj") { const win = Math.floor((bet * 1.5) / minCents) * minCents; pTotal += bet + win; dealerDelta -= win; }
-      else { pTotal += bet; } // unmarked → refund
+      if (res === "lose") {
+        dealerDelta += bet;
+        log.push({ from_user: m.user_id, to_user: dealerId!, amount: bet, note: "lost" });
+      } else if (res === "win") {
+        pTotal += 2 * bet; dealerDelta -= bet;
+        log.push({ from_user: dealerId!, to_user: m.user_id, amount: bet, note: "won" });
+      } else if (res === "bj") {
+        const win = Math.floor((bet * 1.5) / minCents) * minCents;
+        pTotal += bet + win; dealerDelta -= win;
+        log.push({ from_user: dealerId!, to_user: m.user_id, amount: win, note: "blackjack" });
+      } else {
+        pTotal += bet; // unmarked → refund, no movement to log
+      }
       updates[m.user_id] = breakdown(pTotal);
     }
     await supabase.rpc("bj_commit", {
       p_lobby_id: lobby.id, p_counts: updates, p_clear_bets: true, p_dealer_chips: dealerNet + dealerDelta,
+      p_log: log,
     });
+    snapshot.logCount = log.length;
     await writeHand({ phase: "idle", results: {}, marked: [], lastHand: snapshot });
     await Promise.all([loadMembers(), loadTransfers()]);
     toast({ title: "Hand paid out", description: "Tap Undo Last Hand if anything was wrong." });
@@ -395,8 +410,11 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
       p_lobby_id: lobby.id, p_counts: snap.counts, p_clear_bets: false,
       p_dealer_chips: snap.dealerChips, p_bets: snap.bets,
     });
+    if (snap.logCount && snap.logCount > 0) {
+      await supabase.rpc("bj_delete_recent_log", { p_lobby_id: lobby.id, p_count: snap.logCount });
+    }
     await writeHand({ phase: "playing", results: snap.results, marked: snap.marked, lastHand: null });
-    await loadMembers();
+    await Promise.all([loadMembers(), loadTransfers()]);
     toast({ title: "Payout undone", description: "Fix the results and pay out again." });
   };
 
@@ -763,23 +781,43 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
           )}
         </div>
 
-        {/* Transfer log */}
+        {/* Transfer log / hand history */}
         <div className="casino-card p-5">
-          <h2 className="font-serif text-lg font-semibold mb-3 flex items-center gap-2"><History className="w-4 h-4 text-gold-500" /> Recent Transfers</h2>
+          <h2 className="font-serif text-lg font-semibold mb-3 flex items-center gap-2">
+            <History className="w-4 h-4 text-gold-500" /> {isBlackjack ? "Hand History" : "Recent Transfers"}
+          </h2>
           {transfers.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-2">No chips moved yet.</p>
+            <p className="text-sm text-muted-foreground text-center py-2">{isBlackjack ? "No hands played yet." : "No chips moved yet."}</p>
           ) : (
             <div className="divide-y divide-border/40">
-              {transfers.map((t) => (
-                <div key={t.id} className="flex items-center justify-between py-2 text-sm">
-                  <span className="flex items-center gap-2 min-w-0">
-                    <span className={`truncate ${t.from_user === currentUserId ? "text-gold-400 font-semibold" : ""}`}>{t.from_user === currentUserId ? "You" : nameOf(t.from_user)}</span>
-                    <ArrowRight className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                    <span className={`truncate ${t.to_user === currentUserId ? "text-gold-400 font-semibold" : ""}`}>{t.to_user === currentUserId ? "You" : nameOf(t.to_user)}</span>
-                  </span>
-                  <span className="text-gold-400 font-semibold shrink-0 font-mono">{fmtCents(t.amount)}</span>
-                </div>
-              ))}
+              {transfers.map((t) => {
+                if (t.note) {
+                  // Blackjack hand outcome
+                  const player = t.note === "lost" ? t.from_user : t.to_user;
+                  const who = player === currentUserId ? "You" : nameOf(player);
+                  const color = t.note === "lost" ? "text-red-400" : t.note === "blackjack" ? "text-gold-400" : "text-green-400";
+                  const label = t.note === "blackjack" ? "blackjack" : t.note;
+                  const sign = t.note === "lost" ? "−" : "+";
+                  return (
+                    <div key={t.id} className="flex items-center justify-between py-2 text-sm">
+                      <span className="min-w-0 truncate">
+                        <span className="font-semibold">{who}</span> <span className={color}>{label}</span>
+                      </span>
+                      <span className={`font-mono font-semibold shrink-0 ${color}`}>{sign}{fmtCents(t.amount)}</span>
+                    </div>
+                  );
+                }
+                return (
+                  <div key={t.id} className="flex items-center justify-between py-2 text-sm">
+                    <span className="flex items-center gap-2 min-w-0">
+                      <span className={`truncate ${t.from_user === currentUserId ? "text-gold-400 font-semibold" : ""}`}>{t.from_user === currentUserId ? "You" : nameOf(t.from_user)}</span>
+                      <ArrowRight className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                      <span className={`truncate ${t.to_user === currentUserId ? "text-gold-400 font-semibold" : ""}`}>{t.to_user === currentUserId ? "You" : nameOf(t.to_user)}</span>
+                    </span>
+                    <span className="text-gold-400 font-semibold shrink-0 font-mono">{fmtCents(t.amount)}</span>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
