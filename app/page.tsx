@@ -44,13 +44,14 @@ export default function HomePage() {
   const [showTracker, setShowTracker] = useState(false);
   const [trackerGame, setTrackerGame] = useState("Poker");
   const [trackerBuyIn, setTrackerBuyIn] = useState("500");
+  const [trackerBuyInDollars, setTrackerBuyInDollars] = useState("20"); // poker/blackjack ($)
   const [trackerLoading, setTrackerLoading] = useState(false);
   // Poker physical-chip denominations: counts per buy-in
   const [denoms, setDenoms] = useState<{ value: number; count: number }[]>([
-    { value: 0.25, count: 8 },
-    { value: 0.5, count: 4 },
-    { value: 1, count: 10 },
-    { value: 5, count: 2 },
+    { value: 0.25, count: 8 }, // $2.00
+    { value: 0.5, count: 4 },  // $2.00
+    { value: 1, count: 6 },    // $6.00
+    { value: 5, count: 2 },    // $10.00  → $20.00 total, matches the default buy-in
   ]);
   // Poker & Blackjack use the physical chip-denomination setup; the buy-in
   // is the denomination total (in real dollars).
@@ -140,7 +141,7 @@ export default function HomePage() {
     // chip-set total, stored in CENTS. Other games use whole chips.
     const cleanDenoms = denoms.filter((d) => d.count > 0 && d.value > 0);
     const buyInUnits = isDenomTracker
-      ? Math.round(denomTotal * 100)
+      ? Math.round((Number(trackerBuyInDollars) || 0) * 100)
       : Math.max(0, Number(trackerBuyIn) || 0);
 
     const { data: lobby, error } = await supabase
@@ -503,15 +504,42 @@ export default function HomePage() {
               </div>
             )}
 
-            {/* Poker / Blackjack physical-chip denominations — sets the buy-in */}
+            {/* Poker / Blackjack: buy-in dollar amount */}
+            {isDenomTracker && (
+              <div className="space-y-2">
+                <Label>Buy-in per player</Label>
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground text-lg">$</span>
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    step="0.25"
+                    min={0}
+                    value={trackerBuyInDollars}
+                    onChange={(e) => setTrackerBuyInDollars(e.target.value)}
+                    className="flex-1"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  How much each player buys in for. The chip set below is just how to divide that into physical chips.
+                </p>
+              </div>
+            )}
+
+            {/* Poker / Blackjack physical-chip denominations (how to divide the buy-in) */}
             {isDenomTracker && (
               <div className="space-y-2 rounded-xl border border-gold-500/30 bg-gold-500/5 p-3">
                 <Label className="flex items-center justify-between">
-                  <span>Buy-in chip set</span>
-                  <span className="text-gold-400 font-mono">${denomTotal.toFixed(2)}</span>
+                  <span>Chip set</span>
+                  <span className={`font-mono ${Math.abs(denomTotal - (Number(trackerBuyInDollars) || 0)) < 0.005 ? "text-gold-400" : "text-muted-foreground"}`}>
+                    ${denomTotal.toFixed(2)}
+                  </span>
                 </Label>
                 <p className="text-[11px] text-muted-foreground">
-                  Set each denomination&apos;s count — the total is the buy-in. Shown to everyone at the table.
+                  How to divide each player&apos;s ${(Number(trackerBuyInDollars) || 0).toFixed(2)} buy-in into physical chips.
+                  {Math.abs(denomTotal - (Number(trackerBuyInDollars) || 0)) >= 0.005 && (
+                    <span className="text-gold-400"> Chip set totals ${denomTotal.toFixed(2)} — adjust to match.</span>
+                  )}
                 </p>
                 <div className="space-y-2">
                   {denoms.map((d, i) => (
