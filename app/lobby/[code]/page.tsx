@@ -154,6 +154,10 @@ export default function LobbyPage() {
     ? players.find((p) => p.user_id === lobby.dealer_id)
     : undefined;
   const hasDealer = isDealerGame && !!dealerPlayer;
+  // Bankroll (multi-round) games: the stake is a starting buy-in, not a one-shot ante.
+  const isBankroll = lobby
+    ? ["blackjack", "free_bet", "texas_holdem", "three_card"].includes(lobby.game_type)
+    : false;
   // A human dealer needs at least one other player to bank against
   const minPlayers = lobby
     ? (hasDealer ? 2 : (GAME_INFO[lobby.game_type]?.minPlayers ?? 2))
@@ -469,8 +473,8 @@ export default function LobbyPage() {
               Dealer Roulette
             </h2>
             <p className="text-xs text-muted-foreground mb-4">
-              Can&apos;t decide who deals? Spin to pick a dealer — they bank the table (no ante)
-              and win or lose chips against everyone else.
+              Can&apos;t decide who deals? Spin to pick a dealer — they buy in like everyone
+              else and bank the table, winning or losing chips against the other players.
             </p>
 
             {/* Spinner stage */}
@@ -552,7 +556,7 @@ export default function LobbyPage() {
             </div>
 
             <div className="mb-4">
-              <Label className="mb-2 block">Chips per player</Label>
+              <Label className="mb-2 block">{isBankroll ? "Buy-in per player (starting bankroll)" : "Chips per player"}</Label>
               <div className="flex flex-wrap items-center gap-2 mb-3">
                 <Input
                   type="number"
@@ -598,13 +602,13 @@ export default function LobbyPage() {
                           {lp.user_id === currentUser?.id && <span className="text-gold-400 ml-1">(you)</span>}
                         </span>
                       </span>
-                      {isDealer ? (
+                      {isDealer && !isBankroll ? (
                         <span className="text-gold-400 font-semibold shrink-0 flex items-center gap-1">
                           👑 Banks the table
                         </span>
                       ) : (
                         <span className="text-gold-400 font-semibold shrink-0">
-                          {Number(stakeInput) > 0 ? Number(stakeInput).toLocaleString() : "—"} chips
+                          {isDealer && "👑 "}{Number(stakeInput) > 0 ? Number(stakeInput).toLocaleString() : "—"} chips
                         </span>
                       )}
                     </div>
@@ -614,20 +618,22 @@ export default function LobbyPage() {
                   <span className="text-[10px]">◆</span>
                 </div>
                 <div className="flex items-center justify-between text-sm font-semibold">
-                  <span>{hasDealer ? "On the table" : "Total pot"}</span>
+                  <span>{isBankroll ? "On the table" : hasDealer ? "On the table" : "Total pot"}</span>
                   <span className="text-gold-400">
                     {(Number(stakeInput) > 0
-                      ? Number(stakeInput) * (hasDealer ? players.length - 1 : players.length)
+                      ? Number(stakeInput) * ((hasDealer && !isBankroll) ? players.length - 1 : players.length)
                       : 0
                     ).toLocaleString()} chips
                   </span>
                 </div>
                 <p className="text-[11px] text-muted-foreground text-right">
-                  {hasDealer
-                    ? "Players bet against the dealer — chips settle between them, no house cut"
-                    : isDealerGame
-                      ? "Beat the dealer — winning hands pay from the house"
-                      : "Winner takes the pot minus the 5% rake"}
+                  {lobby.game_type === "blackjack" || lobby.game_type === "free_bet"
+                    ? "Multi-hand table — bet each hand from your bankroll; play until the dealer ends it or chips run out (rebuys allowed)"
+                    : lobby.game_type === "texas_holdem"
+                      ? "Real betting rounds — play hands until one player has every chip"
+                      : lobby.game_type === "three_card"
+                        ? "Ante each round vs the house — last player with chips standing wins"
+                        : "Winner takes the pot minus the 5% rake"}
                 </p>
               </div>
             </div>

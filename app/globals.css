@@ -265,7 +265,7 @@
 
   /* ============ Playing cards ============ */
   .deco-card {
-    @apply relative rounded-lg;
+    @apply relative rounded-lg overflow-hidden;
     background: linear-gradient(165deg, #fdfaf1 0%, #f3ead2 100%);
     border: 1.5px solid rgba(154, 111, 31, 0.55);
     box-shadow:
@@ -288,7 +288,7 @@
       0 8px 22px rgba(0, 0, 0, 0.55);
   }
   .deco-card-back {
-    @apply relative rounded-lg;
+    @apply relative rounded-lg overflow-hidden;
     background:
       repeating-linear-gradient(45deg, rgba(var(--deco-gold), 0.18) 0 2px, transparent 2px 11px),
       repeating-linear-gradient(-45deg, rgba(var(--deco-gold), 0.18) 0 2px, transparent 2px 11px),

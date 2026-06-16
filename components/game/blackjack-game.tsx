@@ -5,22 +5,28 @@ import { createClient } from "@/lib/supabase";
 import { PlayerAvatar } from "@/components/player-avatar";
 import { PlayingCard } from "./playing-card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Toaster } from "@/components/ui/toaster";
-import { Loader2, Trophy, Plus, Hand, Spade } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
+import { Loader2, Plus, Hand, Spade, Coins, DoorClosed } from "lucide-react";
 import { formatChips } from "@/lib/utils";
 import {
   type BlackjackState,
-  type BlackjackPlayerHand,
   type BlackjackOutcome,
-  initBlackjackState,
+  initBlackjackTable,
+  setBet,
+  anyBet,
+  dealHand,
   hitPlayer,
   standPlayer,
   allPlayersDone,
   revealDealer,
   resolveDealer,
+  nextHand,
   handValue,
   isBlackjack,
   payoutFor,
+  tableBroke,
 } from "@/lib/game-logic/blackjack";
 import type { Database } from "@/lib/supabase";
 
@@ -39,13 +45,7 @@ interface Props {
   onGameEnd: () => void;
 }
 
-const OUTCOME_LABEL: Record<BlackjackOutcome, string> = {
-  win: "WIN",
-  lose: "LOSE",
-  push: "PUSH",
-  blackjack: "BJ 3:2",
-};
-
+const OUTCOME_LABEL: Record<BlackjackOutcome, string> = { win: "WIN", lose: "LOSE", push: "PUSH", blackjack: "BJ 3:2" };
 const OUTCOME_CLASS: Record<BlackjackOutcome, string> = {
   win: "text-green-400 bg-green-500/15 border-green-500/40",
   lose: "text-red-400 bg-red-500/15 border-red-500/40",
@@ -53,427 +53,414 @@ const OUTCOME_CLASS: Record<BlackjackOutcome, string> = {
   blackjack: "text-gold-400 bg-gold-500/15 border-gold-500/60",
 };
 
-// Seats hug the curved rail: edge seats sit higher, the center seat lowest.
 function arcDrop(index: number, count: number): number {
   if (count <= 1) return 0;
-  return Math.round(Math.sin((index / (count - 1)) * Math.PI) * 26);
+  return Math.round(Math.sin((index / (count - 1)) * Math.PI) * 22);
 }
 
-function Seat({
-  playerHand,
-  profile,
-  isMe,
-  isHostPlayer,
-  outcome,
-  stake,
-  drop,
-}: {
-  playerHand: BlackjackPlayerHand;
-  profile?: Profile;
-  isMe: boolean;
-  isHostPlayer: boolean;
-  outcome: BlackjackOutcome | null;
-  stake: number;
-  drop: number;
-}) {
-  const value = handValue(playerHand.hand);
-  const bj = isBlackjack(playerHand.hand);
-
-  return (
-    <div
-      style={{ transform: `translateY(${drop}px)` }}
-      className={`flex flex-col items-center gap-1.5 p-2 rounded-xl ${
-        isMe ? "bg-black/35 ring-1 ring-gold-500/60" : "bg-black/20"
-      }`}
-    >
-      {/* Cards fan toward the table center */}
-      <div className="flex justify-center">
-        {playerHand.hand.map((card, i) => (
-          <div key={i} className={i > 0 ? "-ml-8" : ""}>
-            <PlayingCard rank={card.display} suit={card.suit} size="md" highlight={value === 21} />
-          </div>
-        ))}
-      </div>
-
-      <div className="flex items-center gap-1.5">
-        <span className={`text-xl font-bold leading-none ${value > 21 ? "text-red-400" : value === 21 ? "text-gold-400" : "text-white"}`}>
-          {value}
-        </span>
-        {outcome ? (
-          <span className={`text-[10px] font-bold border px-1.5 py-0.5 rounded-full ${OUTCOME_CLASS[outcome]}`}>
-            {OUTCOME_LABEL[outcome]}
-          </span>
-        ) : (
-          <>
-            {bj && <span className="text-[10px] font-bold text-gold-400 bg-gold-400/15 px-1.5 py-0.5 rounded-full">BJ!</span>}
-            {playerHand.busted && <span className="text-[10px] font-bold text-red-400 bg-red-400/15 px-1.5 py-0.5 rounded-full">BUST</span>}
-            {playerHand.standing && !playerHand.busted && !bj && (
-              <span className="text-[10px] font-bold text-blue-400 bg-blue-400/15 px-1.5 py-0.5 rounded-full">STAND</span>
-            )}
-          </>
-        )}
-      </div>
-
-      {profile && (
-        <PlayerAvatar username={profile.username} userId={profile.id} size="sm" isHost={isHostPlayer} />
-      )}
-      <span className={`text-xs leading-none truncate max-w-[110px] ${isMe ? "text-gold-400 font-semibold" : "text-white/70"}`}>
-        {isMe ? "You" : profile?.username ?? "Player"}
-      </span>
-      {outcome && (
-        <span className="text-[10px] text-white/50 leading-none">
-          {outcome === "lose" ? `−${formatChips(stake)}` : `+${formatChips(payoutFor(outcome, stake))}`}
-        </span>
-      )}
-    </div>
-  );
-}
-
-export function BlackjackGame({
-  game,
-  lobby,
-  players,
-  currentUser,
-  isHost,
-  onGameEnd,
-}: Props) {
+export function BlackjackGame({ game, lobby, players, currentUser, onGameEnd }: Props) {
   const [state, setState] = useState<BlackjackState | null>(null);
   const [saving, setSaving] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [betInput, setBetInput] = useState("");
+  const [rebuyInputs, setRebuyInputs] = useState<Record<string, string>>({});
   const dealerStarted = useRef(false);
 
   const supabase = createClient();
+  const { toast } = useToast();
   const myId = currentUser.id;
-  // When set, this player banks the table (human dealer) instead of the house.
   const dealerId = lobby.dealer_id;
+  const boss = dealerId ?? lobby.host_id;       // runs the table (deal/next/end)
+  const amBoss = myId === boss;
+  const amApprover = myId === boss || myId === lobby.host_id; // can approve rebuys
   const isDealerMe = !!dealerId && dealerId === myId;
   const dealerProfile = dealerId ? players.find((p) => p.id === dealerId) : undefined;
+  const nameOf = (id: string) => players.find((p) => p.id === id)?.username ?? "Player";
 
   const updateState = async (newState: BlackjackState) => {
     setState(newState);
     await supabase.from("games").update({ state: newState as unknown as Record<string, unknown> }).eq("id", game.id);
   };
+  const reloadState = useCallback(async () => {
+    const { data } = await supabase.from("games").select("state").eq("id", game.id).single();
+    if (data?.state) setState(data.state as unknown as BlackjackState);
+  }, [supabase, game.id]);
 
-  // Flip the hole card, pause, then dealer draws and everyone is scored.
-  const runDealerSequence = async (s: BlackjackState) => {
+  const runDealerSequence = useCallback(async (s: BlackjackState) => {
     if (dealerStarted.current) return;
     dealerStarted.current = true;
-
     const revealed = revealDealer(s);
     await updateState(revealed);
-
     setTimeout(async () => {
       const resolved = resolveDealer(revealed);
       await updateState(resolved);
-
-      setSaving(true);
-      const results = Object.entries(resolved.results!).map(([player_id, outcome]) => ({ player_id, outcome }));
-      if (dealerId) {
-        await supabase.rpc("finish_dealer_game", { p_game_id: game.id, p_results: results });
-      } else {
-        await supabase.rpc("finish_blackjack", { p_game_id: game.id, p_results: results });
-      }
-      setSaving(false);
     }, 1800);
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [game.id, supabase]);
 
   const loadState = useCallback(async () => {
     const { data } = await supabase.from("games").select("state").eq("id", game.id).single();
     const existing = data?.state as Record<string, unknown> | null;
-    // Games saved by the old players-vs-players version have no dealerHand —
-    // treat them as undealt so the host re-deals under dealer rules.
-    const isCurrentFormat = !!existing?.phase && Array.isArray(existing?.dealerHand);
-    if (!isCurrentFormat) {
-      // Non-dealer players get seats; the human dealer (if any) is excluded.
-      const seated = players.filter((p) => p.id !== dealerId);
-      const orderedIds = [
-        ...(seated.some((p) => p.id === lobby.host_id) ? [lobby.host_id] : []),
-        ...seated.filter((p) => p.id !== lobby.host_id).map((p) => p.id),
-      ];
-      if (isHost && orderedIds.length >= 1) {
-        const stake = (existing?.stake as number) ?? 0;
-        const initial = initBlackjackState(orderedIds, stake);
+    const isTable = !!existing?.phase && !!existing?.stacks;
+    if (!isTable) {
+      if (amBoss) {
+        const seated = players.filter((p) => p.id !== dealerId);
+        const orderedIds = [
+          ...(seated.some((p) => p.id === lobby.host_id) ? [lobby.host_id] : []),
+          ...seated.filter((p) => p.id !== lobby.host_id).map((p) => p.id),
+        ];
+        const buyIn = (existing?.stake as number) ?? 0;
+        const initial = initBlackjackTable(orderedIds, buyIn, dealerId);
         await supabase.from("games").update({ state: initial as unknown as Record<string, unknown> }).eq("id", game.id);
         setState(initial);
-        // Everyone dealt naturals? Straight to the dealer.
-        if (allPlayersDone(initial)) runDealerSequence(initial);
       }
     } else {
       setState(existing as unknown as BlackjackState);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [game.id, players, isHost, lobby.host_id, dealerId, supabase]);
+  }, [game.id, players, amBoss, lobby.host_id, dealerId, supabase]);
 
-  useEffect(() => {
-    loadState();
-  }, [loadState]);
+  useEffect(() => { loadState(); }, [loadState]);
 
   useEffect(() => {
     const channel = supabase
       .channel(`game-bj-${game.id}`)
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "games", filter: `id=eq.${game.id}` },
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "games", filter: `id=eq.${game.id}` },
         (payload) => {
           const next = payload.new.state as unknown as BlackjackState;
-          if (Array.isArray(next?.dealerHand)) setState(next);
-        }
-      )
+          if (next?.stacks) setState(next);
+        })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [game.id, supabase]);
 
-  const handleHit = async () => {
-    if (!state || actionLoading || state.phase !== "playing") return;
-    setActionLoading(true);
-    const newState = hitPlayer(state, myId);
-    await updateState(newState);
-    if (allPlayersDone(newState)) await runDealerSequence(newState);
-    setActionLoading(false);
-  };
+  // The boss drives the dealer once everyone has acted.
+  useEffect(() => {
+    if (!state || !amBoss) return;
+    if (state.phase === "playing" && state.hands.length > 0 && allPlayersDone(state) && !dealerStarted.current) {
+      runDealerSequence(state);
+    }
+  }, [state, amBoss, runDealerSequence]);
 
-  const handleStand = async () => {
-    if (!state || actionLoading || state.phase !== "playing") return;
-    setActionLoading(true);
-    const newState = standPlayer(state, myId);
-    await updateState(newState);
-    if (allPlayersDone(newState)) await runDealerSequence(newState);
-    setActionLoading(false);
-  };
-
-  if (!state || !Array.isArray(state.dealerHand) || state.hands.some((h) => !Array.isArray(h.hand))) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-8 h-8 animate-spin text-gold-400" />
-      </div>
-    );
+  if (!state || !state.stacks) {
+    return <div className="flex items-center justify-center h-64"><Loader2 className="w-8 h-8 animate-spin text-gold-400" /></div>;
   }
 
+  const myStack = state.stacks[myId] ?? 0;
+  const myBet = state.bets[myId] ?? 0;
+  const amSeated = myId !== dealerId && state.playerIds.includes(myId);
   const myHand = state.hands.find((ph) => ph.playerId === myId);
   const myDone = myHand ? myHand.standing || myHand.busted : true;
   const stillPlaying = state.hands.filter((ph) => !ph.standing && !ph.busted);
-  const profileFor = (id: string) => players.find((p) => p.id === id);
-
-  const myOutcome = state.results?.[myId] ?? null;
-  const myPayout = myOutcome ? payoutFor(myOutcome, state.stake) : 0;
 
   const dealerRevealed = state.dealerRevealed;
   const dealerValue = handValue(state.dealerHand);
-  const dealerUpValue = handValue([state.dealerHand[0]]);
-  const dealerBJ = isBlackjack(state.dealerHand);
+  const dealerUpValue = state.dealerHand.length ? handValue([state.dealerHand[0]]) : 0;
+  const dealerBJ = state.dealerHand.length === 2 && isBlackjack(state.dealerHand);
   const dealerBusted = dealerValue > 21;
+  const broke = tableBroke(state);
 
-  // When a human banks the table, their net = all antes collected − all payouts.
-  let dealerNet = 0;
-  if (state.results) {
-    const n = Object.keys(state.results).length;
-    const totalPayout = Object.values(state.results).reduce((sum, o) => sum + payoutFor(o, state.stake), 0);
-    dealerNet = n * state.stake - totalPayout;
-  }
+  // ----- actions -----
+  const placeBet = async () => {
+    const amt = Math.floor(Number(betInput));
+    if (!Number.isFinite(amt) || amt <= 0) { toast({ title: "Enter a bet", variant: "destructive" }); return; }
+    setBetInput("");
+    await updateState(setBet(state, myId, amt));
+  };
+  const clearMyBet = async () => updateState(setBet(state, myId, 0));
+
+  const deal = async () => {
+    if (!anyBet(state)) { toast({ title: "No bets placed yet", variant: "destructive" }); return; }
+    const dealt = dealHand(state);
+    dealerStarted.current = false;
+    await updateState(dealt);
+    if (allPlayersDone(dealt)) runDealerSequence(dealt);
+  };
+
+  const handleHit = async () => {
+    if (!myHand || actionLoading || state.phase !== "playing" || myDone) return;
+    setActionLoading(true);
+    await updateState(hitPlayer(state, myId));
+    setActionLoading(false);
+  };
+  const handleStand = async () => {
+    if (!myHand || actionLoading || state.phase !== "playing" || myDone) return;
+    setActionLoading(true);
+    await updateState(standPlayer(state, myId));
+    setActionLoading(false);
+  };
+
+  const startNextHand = async () => {
+    dealerStarted.current = false;
+    await updateState(nextHand(state));
+  };
+  const endGame = async () => {
+    setSaving(true);
+    await supabase.rpc("finish_table_game", { p_game_id: game.id });
+    setSaving(false);
+    onGameEnd();
+  };
+
+  const requestRebuy = async () => {
+    if (state.rebuyReq.includes(myId)) return;
+    await updateState({ ...state, rebuyReq: [...state.rebuyReq, myId] });
+    toast({ title: "Rebuy requested", description: "Waiting for the dealer to approve." });
+  };
+  const approveRebuy = async (pid: string) => {
+    const amt = Math.floor(Number(rebuyInputs[pid] ?? state.stake));
+    if (!Number.isFinite(amt) || amt <= 0) { toast({ title: "Enter an amount", variant: "destructive" }); return; }
+    const { error } = await supabase.rpc("table_rebuy", { p_game_id: game.id, p_player_id: pid, p_amount: amt });
+    if (error) { toast({ title: "Rebuy failed", description: error.message, variant: "destructive" }); return; }
+    setRebuyInputs((r) => ({ ...r, [pid]: "" }));
+    await reloadState();
+    toast({ title: "Rebuy approved", description: `${nameOf(pid)} +${formatChips(amt)}` });
+  };
+
+  const seatProfiles = state.playerIds.map((id) => players.find((p) => p.id === id)).filter(Boolean) as Profile[];
 
   return (
     <div className="space-y-4 animate-fade-in">
       {/* ===== The table ===== */}
       <div className="bj-table px-3 sm:px-6 pt-6 pb-16 sm:pb-20 mt-3">
-        {/* Dealer — flat side of the table */}
+        {/* Dealer */}
         <div className="flex flex-col items-center mb-5">
           <span className="font-display text-xs font-bold uppercase tracking-[0.3em] text-gold-400/90 mb-2">
-            {dealerProfile ? `👑 ${dealerProfile.username}${isDealerMe ? " (You)" : ""}` : "🎩 Dealer"}
+            {dealerProfile ? `👑 ${dealerProfile.username}${isDealerMe ? " (You)" : ""}` : "🎩 House Dealer"}
           </span>
-          <div className="flex justify-center">
-            {state.dealerHand.map((card, i) =>
-              i === 1 && !dealerRevealed ? (
-                <div key={i} className="-ml-8">
-                  <PlayingCard rank="?" suit="?" faceDown size="md" />
-                </div>
-              ) : (
-                <div key={i} className={i > 0 ? "-ml-8" : ""}>
-                  <PlayingCard
-                    rank={card.display}
-                    suit={card.suit}
-                    size="md"
-                    highlight={dealerRevealed && dealerValue === 21}
-                  />
-                </div>
+          <div className="flex justify-center min-h-[7rem] items-center">
+            {state.dealerHand.length === 0 ? (
+              <span className="text-white/40 text-sm">— waiting for the deal —</span>
+            ) : (
+              state.dealerHand.map((card, i) =>
+                i === 1 && !dealerRevealed ? (
+                  <div key={i} className="-ml-8"><PlayingCard rank="?" suit="?" faceDown size="md" /></div>
+                ) : (
+                  <div key={i} className={i > 0 ? "-ml-8" : ""}>
+                    <PlayingCard rank={card.display} suit={card.suit} size="md" highlight={dealerRevealed && dealerValue === 21} />
+                  </div>
+                )
               )
             )}
           </div>
-          <div className="mt-2 flex items-center gap-2">
-            <span className={`text-xl font-bold leading-none ${dealerRevealed && dealerBusted ? "text-red-400" : "text-white"}`}>
-              {dealerRevealed ? dealerValue : `${dealerUpValue} + ?`}
-            </span>
-            {state.phase === "dealer" && (
-              <span className="text-[10px] font-bold text-gold-400 bg-black/40 px-2 py-0.5 rounded-full animate-pulse">
-                DRAWING…
+          {state.dealerHand.length > 0 && (
+            <div className="mt-2 flex items-center gap-2">
+              <span className={`text-xl font-bold leading-none ${dealerRevealed && dealerBusted ? "text-red-400" : "text-white"}`}>
+                {dealerRevealed ? dealerValue : `${dealerUpValue} + ?`}
               </span>
-            )}
-            {dealerRevealed && state.phase === "result" && dealerBJ && (
-              <span className="text-[10px] font-bold text-gold-400 bg-gold-400/15 border border-gold-500/60 px-2 py-0.5 rounded-full">
-                BLACKJACK
-              </span>
-            )}
-            {dealerRevealed && dealerBusted && (
-              <span className="text-[10px] font-bold text-red-400 bg-red-400/15 border border-red-500/40 px-2 py-0.5 rounded-full">
-                BUST
-              </span>
-            )}
-          </div>
+              {state.phase === "dealer" && <span className="text-[10px] font-bold text-gold-400 bg-black/40 px-2 py-0.5 rounded-full animate-pulse">DRAWING…</span>}
+              {dealerRevealed && state.phase === "result" && dealerBJ && <span className="text-[10px] font-bold text-gold-400 bg-gold-400/15 border border-gold-500/60 px-2 py-0.5 rounded-full">BLACKJACK</span>}
+              {dealerRevealed && dealerBusted && <span className="text-[10px] font-bold text-red-400 bg-red-400/15 border border-red-500/40 px-2 py-0.5 rounded-full">BUST</span>}
+            </div>
+          )}
+          {dealerProfile && (
+            <span className="mt-1 text-[11px] font-mono text-gold-300/90">Bank {formatChips(state.stacks[dealerProfile.id] ?? 0)}</span>
+          )}
         </div>
 
-        {/* Center of the felt — house branding */}
+        {/* Center branding */}
         <div className="flex flex-col items-center text-center mb-6 select-none">
           <div className="w-10 h-10 rotate-45 bg-black/30 border border-gold-500/50 flex items-center justify-center mb-3">
             <Spade className="w-5 h-5 text-gold-400 -rotate-45" />
           </div>
-          <p className="font-display text-xl sm:text-2xl font-black uppercase gold-gradient leading-none">
-            Gabe&apos;s Chips
-          </p>
-          <p className="font-serif text-[11px] sm:text-xs tracking-[0.3em] uppercase text-gold-400/70 mt-2">
-            Blackjack pays 3 to 2
-          </p>
-          <p className="text-[10px] tracking-[0.2em] uppercase text-white/40 mt-1">
-            {dealerProfile ? `${dealerProfile.username} banks the table` : "Dealer must hit to 17"} · Stake {formatChips(state.stake)} each
-          </p>
+          <p className="font-display text-xl sm:text-2xl font-black uppercase gold-gradient leading-none">Gabe&apos;s Chips</p>
+          <p className="font-serif text-[11px] sm:text-xs tracking-[0.3em] uppercase text-gold-400/70 mt-2">Blackjack pays 3 to 2</p>
+          <p className="text-[10px] tracking-[0.2em] uppercase text-white/40 mt-1">Hand {state.round} · Buy-in {formatChips(state.stake)}</p>
         </div>
 
-        {/* Player seats — fanned along the curved rail */}
+        {/* Seats */}
         <div className="flex justify-center items-start gap-2 sm:gap-3 flex-wrap">
-          {state.hands.map((ph, i) => (
-            <Seat
-              key={ph.playerId}
-              playerHand={ph}
-              profile={profileFor(ph.playerId)}
-              isMe={ph.playerId === myId}
-              isHostPlayer={ph.playerId === lobby.host_id}
-              outcome={state.results?.[ph.playerId] ?? null}
-              stake={state.stake}
-              drop={arcDrop(i, state.hands.length)}
-            />
-          ))}
+          {seatProfiles.map((profile, i) => {
+            const ph = state.hands.find((h) => h.playerId === profile.id);
+            const isMe = profile.id === myId;
+            const stack = state.stacks[profile.id] ?? 0;
+            const bet = state.bets[profile.id] ?? 0;
+            const outcome = state.results?.[profile.id] ?? null;
+            const value = ph ? handValue(ph.hand) : 0;
+            const bj = ph ? isBlackjack(ph.hand) : false;
+            return (
+              <div key={profile.id} style={{ transform: `translateY(${arcDrop(i, seatProfiles.length)}px)` }}
+                className={`flex flex-col items-center gap-1.5 p-2 rounded-xl ${isMe ? "bg-black/35 ring-1 ring-gold-500/60" : "bg-black/20"} ${stack <= 0 && bet <= 0 && !ph ? "opacity-50" : ""}`}>
+                {ph ? (
+                  <>
+                    <div className="flex justify-center">
+                      {ph.hand.map((card, j) => (
+                        <div key={j} className={j > 0 ? "-ml-8" : ""}>
+                          <PlayingCard rank={card.display} suit={card.suit} size="md" highlight={value === 21} />
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className={`text-xl font-bold leading-none ${value > 21 ? "text-red-400" : value === 21 ? "text-gold-400" : "text-white"}`}>{value}</span>
+                      {outcome ? (
+                        <span className={`text-[10px] font-bold border px-1.5 py-0.5 rounded-full ${OUTCOME_CLASS[outcome]}`}>{OUTCOME_LABEL[outcome]}</span>
+                      ) : (
+                        <>
+                          {bj && <span className="text-[10px] font-bold text-gold-400 bg-gold-400/15 px-1.5 py-0.5 rounded-full">BJ!</span>}
+                          {ph.busted && <span className="text-[10px] font-bold text-red-400 bg-red-400/15 px-1.5 py-0.5 rounded-full">BUST</span>}
+                          {ph.standing && !ph.busted && !bj && <span className="text-[10px] font-bold text-blue-400 bg-blue-400/15 px-1.5 py-0.5 rounded-full">STAND</span>}
+                        </>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <div className="h-[7rem] flex items-center justify-center">
+                    {bet > 0
+                      ? <span className="text-gold-400 font-mono text-sm">bet {formatChips(bet)}</span>
+                      : <span className="text-white/30 text-xs">{stack > 0 ? "no bet" : "out"}</span>}
+                  </div>
+                )}
+                <PlayerAvatar username={profile.username} userId={profile.id} size="sm" isHost={profile.id === lobby.host_id} />
+                <span className={`text-xs leading-none truncate max-w-[110px] ${isMe ? "text-gold-400 font-semibold" : "text-white/70"}`}>{isMe ? "You" : profile.username}</span>
+                <span className="text-[11px] font-mono text-gold-300/90">{formatChips(stack)}</span>
+                {outcome && (
+                  <span className="text-[10px] text-white/50 leading-none">
+                    {outcome === "lose" ? `−${formatChips(bet)}` : `+${formatChips(payoutFor(outcome, bet) - bet)}`}
+                  </span>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
 
-      {/* ===== Below the table ===== */}
+      {/* ===== Controls ===== */}
 
-      {/* Action buttons */}
+      {/* Betting phase — seated player picks a wager */}
+      {state.phase === "betting" && amSeated && (
+        <div className="casino-card p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-semibold">Your bet</span>
+            <span className="text-sm text-muted-foreground">Stack <span className="font-mono text-gold-400">{formatChips(myStack)}</span></span>
+          </div>
+          {myBet > 0 ? (
+            <div className="flex items-center justify-between rounded-lg bg-gold-500/10 border border-gold-500/30 px-3 py-2">
+              <span className="text-gold-300 font-semibold">Bet placed: {formatChips(myBet)}</span>
+              <Button variant="ghost" size="sm" onClick={clearMyBet}>Clear</Button>
+            </div>
+          ) : myStack <= 0 ? (
+            <p className="text-sm text-red-400/90 text-center py-1">You&apos;re out of chips — request a rebuy below.</p>
+          ) : (
+            <>
+              <div className="flex gap-2">
+                <Input type="number" inputMode="numeric" min={1} max={myStack} placeholder="Amount" value={betInput} onChange={(e) => setBetInput(e.target.value)} className="flex-1" />
+                <Button variant="gold" onClick={placeBet} disabled={!betInput}><Coins className="w-4 h-4 mr-1.5" /> Bet</Button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {[state.stake, Math.round(state.stake / 2), Math.round(state.stake / 4)].filter((v, idx, a) => v > 0 && a.indexOf(v) === idx).map((v) => (
+                  <Button key={v} variant="outline" size="sm" onClick={() => setBetInput(String(Math.min(v, myStack)))}>{formatChips(v)}</Button>
+                ))}
+                <Button variant="outline" size="sm" onClick={() => setBetInput(String(myStack))}>All in</Button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Betting phase — boss deals once bets are in */}
+      {state.phase === "betting" && amBoss && (
+        <div className="casino-card p-4 space-y-3">
+          <p className="text-sm font-medium text-gold-400">{isDealerMe ? "👑 You're the dealer" : "🎩 You run the table"}</p>
+          <div className="space-y-1.5">
+            {seatProfiles.map((p) => (
+              <div key={p.id} className="flex items-center justify-between text-sm">
+                <span className="text-white/90">{p.id === myId ? "You" : p.username} <span className="text-white/40">· {formatChips(state.stacks[p.id] ?? 0)}</span></span>
+                <span className={(state.bets[p.id] ?? 0) > 0 ? "text-gold-400 font-mono" : "text-white/40"}>{(state.bets[p.id] ?? 0) > 0 ? formatChips(state.bets[p.id]) : (state.stacks[p.id] ?? 0) > 0 ? "waiting…" : "out"}</span>
+              </div>
+            ))}
+          </div>
+          {broke ? (
+            <p className="text-sm text-red-400/90 text-center">All players are out of chips.</p>
+          ) : (
+            <Button variant="gold" size="lg" className="w-full" onClick={deal} disabled={!anyBet(state)}>Deal Hand</Button>
+          )}
+          <Button variant="outline" size="sm" className="w-full border-destructive/40 text-destructive hover:bg-destructive/10" onClick={endGame} disabled={saving}>
+            {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <DoorClosed className="w-4 h-4 mr-2" />} End Game &amp; Cash Out
+          </Button>
+        </div>
+      )}
+
+      {/* Playing — my hit/stand */}
       {state.phase === "playing" && myHand && (
         <div className="casino-card p-4">
           {myDone ? (
             <div className="text-center space-y-1">
               <p className="text-muted-foreground text-sm font-medium">
-                {myHand.busted
-                  ? "You busted 💥"
-                  : isBlackjack(myHand.hand)
-                    ? "Blackjack! Waiting for the dealer…"
-                    : `You're standing on ${handValue(myHand.hand)}`}
+                {myHand.busted ? "You busted 💥" : isBlackjack(myHand.hand) ? "Blackjack! Waiting for the dealer…" : `You're standing on ${handValue(myHand.hand)}`}
               </p>
               {stillPlaying.length > 0 && (
                 <div className="flex items-center justify-center gap-2 text-muted-foreground text-sm">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Waiting for {stillPlaying.length} player{stillPlaying.length > 1 ? "s" : ""}…
+                  <Loader2 className="w-4 h-4 animate-spin" /> Waiting for {stillPlaying.length} player{stillPlaying.length > 1 ? "s" : ""}…
                 </div>
               )}
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-3">
-              <Button
-                variant="gold"
-                size="lg"
-                onClick={handleHit}
-                disabled={actionLoading || handValue(myHand.hand) >= 21}
-                className="h-16 flex-col gap-1"
-              >
-                <Plus className="w-5 h-5" />
-                <span>Hit</span>
-              </Button>
-              <Button
-                variant="casino"
-                size="lg"
-                onClick={handleStand}
-                disabled={actionLoading}
-                className="h-16 flex-col gap-1"
-              >
-                <Hand className="w-5 h-5" />
-                <span>Stand</span>
-              </Button>
+              <Button variant="gold" size="lg" onClick={handleHit} disabled={actionLoading || handValue(myHand.hand) >= 21} className="h-16 flex-col gap-1"><Plus className="w-5 h-5" /><span>Hit</span></Button>
+              <Button variant="casino" size="lg" onClick={handleStand} disabled={actionLoading} className="h-16 flex-col gap-1"><Hand className="w-5 h-5" /><span>Stand</span></Button>
             </div>
           )}
         </div>
       )}
 
-      {/* The human dealer's view while players act */}
+      {/* Playing — dealer waiting view */}
       {state.phase === "playing" && isDealerMe && (
         <div className="casino-card p-4 text-center">
           <p className="text-sm font-medium text-gold-400">👑 You&apos;re the dealer</p>
-          <p className="text-xs text-muted-foreground mt-1">
-            Your hand plays itself (hit to 17) once everyone acts. You collect from players who
-            bust or fall short, and pay those who beat you.
-          </p>
-          {stillPlaying.length > 0 && (
-            <div className="flex items-center justify-center gap-2 text-muted-foreground text-sm mt-2">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Waiting for {stillPlaying.length} player{stillPlaying.length > 1 ? "s" : ""}…
+          <p className="text-xs text-muted-foreground mt-1">Your hand plays itself (hit to 17) once everyone acts.</p>
+          {stillPlaying.length > 0 && <div className="flex items-center justify-center gap-2 text-muted-foreground text-sm mt-2"><Loader2 className="w-4 h-4 animate-spin" /> Waiting for {stillPlaying.length}…</div>}
+        </div>
+      )}
+
+      {state.phase === "dealer" && (
+        <div className="casino-card p-4 text-center"><Loader2 className="w-5 h-5 animate-spin text-gold-400 mx-auto mb-1" /><p className="text-sm text-muted-foreground">Dealer reveals the hole card…</p></div>
+      )}
+
+      {/* Result — next hand / end */}
+      {state.phase === "result" && (
+        <div className="casino-card p-4 space-y-3 text-center">
+          {amSeated && state.results?.[myId] && (
+            <p className="font-display text-2xl font-black gold-gradient uppercase">
+              {state.results[myId] === "blackjack" ? "Blackjack!" : state.results[myId] === "win" ? "You win!" : state.results[myId] === "push" ? "Push" : "Dealer wins"}
+            </p>
+          )}
+          <p className="text-sm text-muted-foreground">Your stack: <span className="font-mono text-gold-400">{formatChips(myStack)}</span></p>
+          {amBoss ? (
+            <div className="space-y-2">
+              {broke ? (
+                <p className="text-sm text-red-400/90">All players are out of chips — cash out to end.</p>
+              ) : (
+                <Button variant="gold" size="lg" className="w-full" onClick={startNextHand}>Next Hand</Button>
+              )}
+              <Button variant="outline" size="sm" className="w-full border-destructive/40 text-destructive hover:bg-destructive/10" onClick={endGame} disabled={saving}>
+                {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <DoorClosed className="w-4 h-4 mr-2" />} End Game &amp; Cash Out
+              </Button>
             </div>
+          ) : (
+            <div className="flex items-center justify-center gap-2 text-muted-foreground text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Waiting for the dealer…</div>
           )}
         </div>
       )}
 
-      {/* Dealer drawing */}
-      {state.phase === "dealer" && (
+      {/* Rebuy — request (player) */}
+      {amSeated && myStack <= 0 && state.phase !== "playing" && state.phase !== "dealer" && (
         <div className="casino-card p-4 text-center">
-          <Loader2 className="w-5 h-5 animate-spin text-gold-400 mx-auto mb-1" />
-          <p className="text-sm text-muted-foreground">Dealer reveals the hole card…</p>
+          {state.rebuyReq.includes(myId)
+            ? <p className="text-sm text-gold-400">Rebuy requested — waiting for the dealer to approve.</p>
+            : <Button variant="gold" onClick={requestRebuy}><Coins className="w-4 h-4 mr-2" /> Request a rebuy</Button>}
         </div>
       )}
 
-      {/* Result — for the human dealer */}
-      {state.phase === "result" && isDealerMe && (
-        <div className="casino-card p-6 text-center border-gold-500/40">
-          <Trophy className={`w-10 h-10 mx-auto mb-3 ${dealerNet < 0 ? "text-muted-foreground" : "text-gold-400"}`} />
-          <h2 className="font-display text-4xl font-black gold-gradient mb-2 uppercase">
-            {dealerNet > 0 ? "House Wins!" : dealerNet < 0 ? "Players Win" : "Even Table"}
-          </h2>
-          <p className="text-muted-foreground mb-1">
-            You finished on <strong className={dealerBusted ? "text-red-400" : "text-foreground"}>{dealerValue}{dealerBusted ? " — BUST" : ""}</strong> as the dealer
-          </p>
-          <p className="text-gold-400 font-semibold mb-4">
-            {dealerNet > 0
-              ? `You collect ${formatChips(dealerNet)} chips`
-              : dealerNet < 0
-                ? `You pay out ${formatChips(-dealerNet)} chips`
-                : "You break even"}
-          </p>
-          {saving && <Loader2 className="w-4 h-4 animate-spin text-gold-400 mx-auto mb-3" />}
-          <Button variant="gold" size="lg" onClick={onGameEnd} disabled={saving}>
-            Back to Lobby
-          </Button>
-        </div>
-      )}
-
-      {/* Result */}
-      {state.phase === "result" && myOutcome && (
-        <div className="casino-card p-6 text-center border-gold-500/40">
-          <Trophy className={`w-10 h-10 mx-auto mb-3 ${myOutcome === "lose" ? "text-muted-foreground" : "text-gold-400"}`} />
-          <h2 className="font-display text-4xl font-black gold-gradient mb-2 uppercase">
-            {myOutcome === "blackjack" && "Blackjack!"}
-            {myOutcome === "win" && "You Beat the Dealer!"}
-            {myOutcome === "push" && "Push"}
-            {myOutcome === "lose" && "Dealer Wins"}
-          </h2>
-          <p className="text-muted-foreground mb-1">
-            Dealer finished on <strong className={dealerBusted ? "text-red-400" : "text-foreground"}>{dealerValue}{dealerBusted ? " — BUST" : ""}</strong>
-          </p>
-          <p className="text-gold-400 font-semibold mb-4">
-            {myOutcome === "lose"
-              ? `You lose your ${formatChips(state.stake)} chip stake`
-              : myOutcome === "push"
-                ? `Stake returned — ${formatChips(myPayout)} chips`
-                : `You collect ${formatChips(myPayout)} chips`}
-          </p>
-          {saving && <Loader2 className="w-4 h-4 animate-spin text-gold-400 mx-auto mb-3" />}
-          <Button variant="gold" size="lg" onClick={onGameEnd} disabled={saving}>
-            Back to Lobby
-          </Button>
+      {/* Rebuy — approvals (dealer/host) */}
+      {amApprover && state.rebuyReq.length > 0 && (
+        <div className="casino-card p-4 space-y-2">
+          <p className="text-sm font-semibold">Rebuy requests</p>
+          {state.rebuyReq.map((pid) => (
+            <div key={pid} className="flex items-center gap-2">
+              <span className="text-sm flex-1 truncate">{nameOf(pid)}</span>
+              <Input type="number" inputMode="numeric" min={1} placeholder={String(state.stake)} value={rebuyInputs[pid] ?? ""} onChange={(e) => setRebuyInputs((r) => ({ ...r, [pid]: e.target.value }))} className="w-28" />
+              <Button variant="gold" size="sm" onClick={() => approveRebuy(pid)}>Approve</Button>
+            </div>
+          ))}
         </div>
       )}
 
