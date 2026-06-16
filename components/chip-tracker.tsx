@@ -35,8 +35,6 @@ interface Props {
   currentUserId: string;
 }
 
-const QUICK = [10, 25, 50, 100];
-
 export function ChipTracker({ lobby, currentUserId }: Props) {
   const [members, setMembers] = useState<Member[]>([]);
   const [transfers, setTransfers] = useState<TransferRow[]>([]);
@@ -107,7 +105,10 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
         loadMembers();
         loadTransfers();
         if (p.to === currentUserId) {
-          toast({ title: "💰 Chips received", description: `${p.from} sent you ${formatChips(p.amount ?? 0)} chips` });
+          const money = !!(lobby.tracker_config as { money?: boolean } | null)?.money;
+          const amt = p.amount ?? 0;
+          const disp = money ? `$${(amt / 100).toFixed(2)}` : `${amt.toLocaleString()} chips`;
+          toast({ title: "💰 Chips received", description: `${p.from} sent you ${disp}` });
         }
       })
       .subscribe();
@@ -121,17 +122,27 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
     (lobby.tracker_config as { denominations?: { value: number; count: number }[] } | null)?.denominations ?? [];
   const denomTotal = denominations.reduce((s, d) => s + d.value * d.count, 0);
 
+  // Denomination rooms track real money (stored in cents); others use whole chips.
+  const moneyMode = denominations.length > 0;
+  const fmt = (units: number) =>
+    moneyMode
+      ? `${units < 0 ? "−" : ""}$${(Math.abs(units) / 100).toFixed(2)}`
+      : `${units < 0 ? "−" : ""}${formatChips(Math.abs(units))}`;
+  const quickAmounts = moneyMode ? [0.5, 1, 5, 10] : [10, 25, 50, 100];
+
   const handleSend = async () => {
     const amt = Number(amount);
     if (!recipient || !Number.isFinite(amt) || amt <= 0) {
       toast({ title: "Enter an amount and pick a recipient", variant: "destructive" });
       return;
     }
+    // In money mode the input is dollars; store as cents.
+    const units = moneyMode ? Math.round(amt * 100) : Math.floor(amt);
     setSending(true);
     const { error } = await supabase.rpc("transfer_chips", {
       p_lobby_id: lobby.id,
       p_to: recipient,
-      p_amount: Math.floor(amt),
+      p_amount: units,
     });
     if (error) {
       toast({ title: "Transfer failed", description: error.message, variant: "destructive" });
@@ -142,12 +153,12 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
     channelRef.current?.send({
       type: "broadcast",
       event: "transfer",
-      payload: { from: me?.username ?? "Someone", to: recipient, amount: Math.floor(amt) },
+      payload: { from: me?.username ?? "Someone", to: recipient, amount: units },
     });
     setAmount("");
     setRecipient(null);
     await Promise.all([loadMembers(), loadTransfers()]);
-    toast({ title: "Chips sent", description: `${formatChips(Math.floor(amt))} → ${nameOf(recipient)}` });
+    toast({ title: "Chips sent", description: `${fmt(units)} → ${nameOf(recipient)}` });
     setSending(false);
   };
 
@@ -199,7 +210,7 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
           <div className="casino-card p-5 text-center">
             <p className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Your chips</p>
             <p className={`font-display text-4xl font-black ${me.chips < 0 ? "text-red-400" : "logo-gold"}`}>
-              {me.chips < 0 ? "−" : ""}{formatChips(Math.abs(me.chips))}
+              {fmt(me.chips)}
             </p>
           </div>
         )}
@@ -258,7 +269,7 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
                     <PlayerAvatar username={m.username} userId={m.user_id} size="sm" />
                     <span className="text-[11px] truncate w-full text-center">{m.username}</span>
                     <span className={`text-[10px] ${m.chips < 0 ? "text-red-400" : "text-muted-foreground"}`}>
-                      {m.chips < 0 ? "−" : ""}{formatChips(Math.abs(m.chips))}
+                      {fmt(m.chips)}
                     </span>
                   </button>
                 ))}
@@ -267,9 +278,10 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
               <div className="flex gap-2 mb-3">
                 <Input
                   type="number"
-                  inputMode="numeric"
-                  min={1}
-                  placeholder="Amount"
+                  inputMode={moneyMode ? "decimal" : "numeric"}
+                  step={moneyMode ? "0.25" : "1"}
+                  min={moneyMode ? 0.01 : 1}
+                  placeholder={moneyMode ? "$ amount" : "Amount"}
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
                   className="flex-1"
@@ -279,9 +291,9 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
                 </Button>
               </div>
               <div className="flex flex-wrap gap-2">
-                {QUICK.map((q) => (
+                {quickAmounts.map((q) => (
                   <Button key={q} type="button" variant="ghost" size="sm" className="text-xs" onClick={() => setAmount(String(q))}>
-                    <Coins className="w-3 h-3 mr-1 text-gold-500" />{q}
+                    <Coins className="w-3 h-3 mr-1 text-gold-500" />{moneyMode ? `$${q}` : q}
                   </Button>
                 ))}
               </div>
@@ -309,7 +321,7 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
                       {t.to_user === currentUserId ? "You" : nameOf(t.to_user)}
                     </span>
                   </span>
-                  <span className="text-gold-400 font-semibold shrink-0">{formatChips(t.amount)}</span>
+                  <span className="text-gold-400 font-semibold shrink-0">{fmt(t.amount)}</span>
                 </div>
               ))}
             </div>

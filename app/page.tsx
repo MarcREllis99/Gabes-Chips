@@ -52,7 +52,9 @@ export default function HomePage() {
     { value: 1, count: 10 },
     { value: 5, count: 2 },
   ]);
-  const isPokerTracker = trackerGame.trim().toLowerCase().includes("poker");
+  // Poker & Blackjack use the physical chip-denomination setup; the buy-in
+  // is the denomination total (in real dollars).
+  const isDenomTracker = ["poker", "blackjack"].some((g) => trackerGame.trim().toLowerCase().includes(g));
   const denomTotal = denoms.reduce((s, d) => s + d.value * d.count, 0);
 
   const router = useRouter();
@@ -134,6 +136,13 @@ export default function HomePage() {
     setTrackerLoading(true);
     const code = generateLobbyCode();
 
+    // Denomination games (poker/blackjack) track real money: buy-in = the
+    // chip-set total, stored in CENTS. Other games use whole chips.
+    const cleanDenoms = denoms.filter((d) => d.count > 0 && d.value > 0);
+    const buyInUnits = isDenomTracker
+      ? Math.round(denomTotal * 100)
+      : Math.max(0, Number(trackerBuyIn) || 0);
+
     const { data: lobby, error } = await supabase
       .from("lobbies")
       .insert({
@@ -141,11 +150,11 @@ export default function HomePage() {
         code,
         host_id: user.id,
         max_players: 8,
-        buy_in: Math.max(0, Number(trackerBuyIn) || 0),
+        buy_in: buyInUnits,
         status: "tracking",
         game_type: "chip_tracker",
-        tracker_config: isPokerTracker
-          ? { denominations: denoms.filter((d) => d.count > 0 && d.value > 0) }
+        tracker_config: isDenomTracker
+          ? { money: true, denominations: cleanDenoms }
           : null,
       })
       .select()
@@ -160,7 +169,7 @@ export default function HomePage() {
     await supabase.from("lobby_players").insert({
       lobby_id: lobby.id,
       user_id: user.id,
-      chips: Math.max(0, Number(trackerBuyIn) || 0),
+      chips: buyInUnits,
     });
 
     setTrackerLoading(false);
@@ -477,30 +486,32 @@ export default function HomePage() {
               />
             </div>
 
-            <div className="space-y-2">
-              <Label>Starting chips (each player&apos;s buy-in)</Label>
-              <Input
-                type="number"
-                inputMode="numeric"
-                min={0}
-                value={trackerBuyIn}
-                onChange={(e) => setTrackerBuyIn(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                Just a reference for how many chips you&apos;re each playing with. Chips move only when you
-                send them — balances are your real running total.
-              </p>
-            </div>
+            {/* Non-denomination games: a simple whole-chip buy-in */}
+            {!isDenomTracker && (
+              <div className="space-y-2">
+                <Label>Starting chips (each player&apos;s buy-in)</Label>
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  value={trackerBuyIn}
+                  onChange={(e) => setTrackerBuyIn(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  How many chips you&apos;re each playing with. Chips move only when you send them.
+                </p>
+              </div>
+            )}
 
-            {/* Poker physical-chip denominations */}
-            {isPokerTracker && (
+            {/* Poker / Blackjack physical-chip denominations — sets the buy-in */}
+            {isDenomTracker && (
               <div className="space-y-2 rounded-xl border border-gold-500/30 bg-gold-500/5 p-3">
                 <Label className="flex items-center justify-between">
-                  <span>Chip set per buy-in</span>
+                  <span>Buy-in chip set</span>
                   <span className="text-gold-400 font-mono">${denomTotal.toFixed(2)}</span>
                 </Label>
                 <p className="text-[11px] text-muted-foreground">
-                  How each player&apos;s physical buy-in stack is divided. Shown to everyone at the table.
+                  Set each denomination&apos;s count — the total is the buy-in. Shown to everyone at the table.
                 </p>
                 <div className="space-y-2">
                   {denoms.map((d, i) => (
