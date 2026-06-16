@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useId } from "react";
 import { createClient } from "@/lib/supabase";
 import { PlayerAvatar } from "@/components/player-avatar";
 import { ChipBalance } from "@/components/chip-balance";
@@ -30,6 +30,52 @@ interface Props {
   isHost: boolean;
   pot: number;
   onGameEnd: () => void;
+}
+
+// A metallic coin: crown-embossed heads, spade-embossed tails, milled edge.
+function Coin({ side, size = 140 }: { side: CoinSide; size?: number }) {
+  const uid = useId().replace(/:/g, "");
+  const gold = `gold-${uid}`;
+  const sheen = `sheen-${uid}`;
+  const heads = side === "heads";
+  const emblem = heads
+    // crown
+    ? "M30 62 L30 44 L41 53 L50 39 L59 53 L70 44 L70 62 Z"
+    // spade
+    : "M50 36 C58 49 71 53 71 61 C71 67 64 69 58 65 C57 64 56 63 55 62 C56 67 58 71 62 73 L38 73 C42 71 44 67 45 62 C44 63 43 64 42 65 C36 69 29 67 29 61 C29 53 42 49 50 36 Z";
+  return (
+    <svg viewBox="0 0 100 100" width={size} height={size} className="block drop-shadow-[0_6px_10px_rgba(0,0,0,0.55)]">
+      <defs>
+        <radialGradient id={gold} cx="38%" cy="32%" r="75%">
+          <stop offset="0%" stopColor="#fdebb0" />
+          <stop offset="45%" stopColor="#e8c24e" />
+          <stop offset="80%" stopColor="#c79a2e" />
+          <stop offset="100%" stopColor="#9a6f1b" />
+        </radialGradient>
+        <radialGradient id={sheen} cx="36%" cy="28%" r="45%">
+          <stop offset="0%" stopColor="#ffffff" stopOpacity="0.6" />
+          <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
+        </radialGradient>
+      </defs>
+      {/* body */}
+      <circle cx="50" cy="50" r="48" fill={`url(#${gold})`} stroke="#7a571280" strokeWidth="1" />
+      {/* milled / reeded edge */}
+      <circle cx="50" cy="50" r="45.5" fill="none" stroke="#8a6a1c" strokeWidth="4" strokeDasharray="1.6 2.4" opacity="0.45" />
+      {/* raised inner disc */}
+      <circle cx="50" cy="50" r="40" fill={`url(#${gold})`} stroke="#b8902e" strokeWidth="1" />
+      <circle cx="50" cy="50" r="37" fill="none" stroke="#9a6f1b" strokeWidth="0.7" opacity="0.6" />
+      {/* embossed emblem: dark base + light top highlight */}
+      <path d={emblem} fill="#7a5c14" opacity="0.85" transform="translate(0,0.8)" />
+      <path d={emblem} fill="#f6e2a0" />
+      <path d={emblem} fill="none" stroke="#7a5c14" strokeWidth="0.5" opacity="0.5" />
+      {/* side label */}
+      <text x="50" y="86" textAnchor="middle" fontSize="9" fontWeight="bold" letterSpacing="2" fill="#7a5c14" opacity="0.9" fontFamily="serif">
+        {heads ? "HEADS" : "TAILS"}
+      </text>
+      {/* top sheen */}
+      <circle cx="50" cy="50" r="48" fill={`url(#${sheen})`} />
+    </svg>
+  );
 }
 
 export function CoinFlipGame({
@@ -182,11 +228,9 @@ export function CoinFlipGame({
             </p>
             <ChipBalance balance={state.stake} size="sm" className="mt-1" />
             {side && (
-              <div className="mt-2">
-                <span className={`text-2xl ${side === "heads" ? "text-gold-400" : "text-muted-foreground"}`}>
-                  {side === "heads" ? "👑" : "🔵"}
-                </span>
-                <span className="text-xs text-muted-foreground block uppercase tracking-wider">{side}</span>
+              <div className="mt-2 flex flex-col items-center">
+                <Coin side={side} size={34} />
+                <span className="text-xs text-muted-foreground block uppercase tracking-wider mt-1">{side}</span>
               </div>
             )}
           </div>
@@ -195,8 +239,13 @@ export function CoinFlipGame({
 
       {/* Coin */}
       <div className="casino-card p-8 text-center">
-        <div className={`inline-block text-7xl mb-4 ${flipping ? "animate-coin-spin" : "transition-transform duration-300"}`}>
-          {coinFace === "heads" ? "🟡" : "⚫"}
+        <div className="coin-container inline-block mb-4">
+          <div
+            className={flipping ? "animate-coin-spin" : "transition-transform duration-300"}
+            style={{ transformStyle: "preserve-3d" }}
+          >
+            <Coin side={coinFace} size={150} />
+          </div>
         </div>
         <p className={`font-display font-black uppercase tracking-wider ${!animating && state.phase === "result" ? "text-5xl gold-gradient" : "text-2xl text-muted-foreground"}`}>
           {animating ? "Flipping..." : state.phase === "result" ? state.result : "?"}
@@ -236,7 +285,7 @@ export function CoinFlipGame({
                   onClick={() => handlePickSide("heads")}
                   className="h-20 flex-col gap-1 border-gold-500/40 hover:bg-gold-500/10"
                 >
-                  <span className="text-3xl">👑</span>
+                  <Coin side="heads" size={36} />
                   <span className="font-bold">Heads</span>
                 </Button>
                 <Button
@@ -245,7 +294,7 @@ export function CoinFlipGame({
                   onClick={() => handlePickSide("tails")}
                   className="h-20 flex-col gap-1 hover:bg-muted"
                 >
-                  <span className="text-3xl">🔵</span>
+                  <Coin side="tails" size={36} />
                   <span className="font-bold">Tails</span>
                 </Button>
               </div>
