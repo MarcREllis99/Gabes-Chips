@@ -26,10 +26,18 @@ interface Member {
 }
 type HandPhase = "idle" | "betting" | "playing";
 type Outcome = "win" | "lose" | "bj";
+interface HandSnapshot {
+  counts: Record<string, Record<string, number>>; // pre-payout player stacks
+  dealerChips: number;                              // pre-payout dealer net (cents)
+  bets: Record<string, number>;
+  results: Record<string, Outcome>;
+  marked: string[];
+}
 interface TrackerState {
   phase: HandPhase;
   results: Record<string, Outcome>;
   marked: string[]; // order of marks, for Undo
+  lastHand?: HandSnapshot | null; // for Undo after Pay Out
 }
 interface TransferRow {
   id: string;
@@ -258,8 +266,9 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
       if (ticks >= 18) {
         if (spinTimer.current) clearInterval(spinTimer.current);
         setSpinning(false);
-        await supabase.from("lobbies").update({ dealer_id: winner.user_id }).eq("id", lobby.id);
+        await supabase.rpc("set_dealer", { p_lobby_id: lobby.id, p_dealer_id: winner.user_id });
         setDealerId(winner.user_id);
+        await loadMembers();
         channelRef.current?.send({ type: "broadcast", event: "dealer", payload: { name: winner.username } });
       }
     }, 110);
@@ -279,22 +288,21 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
     }
     return counts;
   };
-  const totalOf = (uid: string | null) => totalCents(members.find((m) => m.user_id === uid)?.chipCounts ?? {});
-
   const writeHand = async (next: TrackerState) => {
     setHand(next);
     await supabase.from("lobbies").update({ tracker_state: next as unknown as Record<string, unknown> }).eq("id", lobby.id);
   };
 
   const assignDealer = async (pid: string) => {
-    await supabase.from("lobbies").update({ dealer_id: pid }).eq("id", lobby.id);
+    await supabase.rpc("set_dealer", { p_lobby_id: lobby.id, p_dealer_id: pid });
     setDealerId(pid); setAssignMode(false);
+    await loadMembers();
     channelRef.current?.send({ type: "broadcast", event: "dealer", payload: { name: nameOf(pid) } });
   };
 
   const newHand = async () => {
     await supabase.rpc("bj_commit", { p_lobby_id: lobby.id, p_counts: {}, p_clear_bets: true });
-    await writeHand({ phase: "betting", results: {}, marked: [] });
+    await writeHand({ phase: "betting", results: {}, marked: [], lastHand: null });
     setBetTray({});
     await loadMembers();
   };
@@ -346,25 +354,50 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
     await writeHand({ ...hand, results, marked });
   };
 
+  const dealerMember = members.find((m) => m.user_id === dealerId);
+  const dealerNet = dealerMember?.chips ?? 0; // dealer bank (cents, signed)
+
   const payOut = async () => {
+    // Snapshot the current (pre-payout) state so the dealer can Undo afterward
+    const snapshot: HandSnapshot = {
+      counts: Object.fromEntries(others.map((m) => [m.user_id, m.chipCounts])),
+      dealerChips: dealerNet,
+      bets: Object.fromEntries(others.map((m) => [m.user_id, m.betCents])),
+      results: hand.results,
+      marked: hand.marked,
+    };
+
     const updates: Record<string, Record<string, number>> = {};
-    let dealerTotal = totalOf(dealerId);
+    let dealerDelta = 0;
     for (const m of others) {
       if (m.betCents <= 0) continue;
       const bet = m.betCents;
       const res = hand.results[m.user_id];
       let pTotal = totalCents(m.chipCounts); // already minus the escrowed bet
-      if (res === "lose") { dealerTotal += bet; }
-      else if (res === "win") { pTotal += 2 * bet; dealerTotal -= bet; }
-      else if (res === "bj") { const win = Math.floor((bet * 1.5) / minCents) * minCents; pTotal += bet + win; dealerTotal -= win; }
+      if (res === "lose") { dealerDelta += bet; }
+      else if (res === "win") { pTotal += 2 * bet; dealerDelta -= bet; }
+      else if (res === "bj") { const win = Math.floor((bet * 1.5) / minCents) * minCents; pTotal += bet + win; dealerDelta -= win; }
       else { pTotal += bet; } // unmarked → refund
       updates[m.user_id] = breakdown(pTotal);
     }
-    if (dealerId) updates[dealerId] = breakdown(Math.max(0, dealerTotal));
-    await supabase.rpc("bj_commit", { p_lobby_id: lobby.id, p_counts: updates, p_clear_bets: true });
-    await writeHand({ phase: "idle", results: {}, marked: [] });
+    await supabase.rpc("bj_commit", {
+      p_lobby_id: lobby.id, p_counts: updates, p_clear_bets: true, p_dealer_chips: dealerNet + dealerDelta,
+    });
+    await writeHand({ phase: "idle", results: {}, marked: [], lastHand: snapshot });
     await Promise.all([loadMembers(), loadTransfers()]);
-    toast({ title: "Hand paid out" });
+    toast({ title: "Hand paid out", description: "Tap Undo Last Hand if anything was wrong." });
+  };
+
+  const undoLastHand = async () => {
+    const snap = hand.lastHand;
+    if (!snap) return;
+    await supabase.rpc("bj_commit", {
+      p_lobby_id: lobby.id, p_counts: snap.counts, p_clear_bets: false,
+      p_dealer_chips: snap.dealerChips, p_bets: snap.bets,
+    });
+    await writeHand({ phase: "playing", results: snap.results, marked: snap.marked, lastHand: null });
+    await loadMembers();
+    toast({ title: "Payout undone", description: "Fix the results and pay out again." });
   };
 
   const potCents = others.reduce((s, m) => s + (m.betCents > 0 ? m.betCents : 0), 0);
@@ -473,25 +506,33 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
               const isSpinTarget = spinning && members[spinIdx]?.user_id === m.user_id;
               return (
                 <div key={m.user_id}
-                  className={`rounded-xl p-2.5 ${isSpinTarget ? "bg-gold-500/25 ring-2 ring-gold-400" : isMe ? "bg-black/40 ring-1 ring-gold-500/50" : "bg-black/25"}`}>
+                  className={`rounded-xl p-2.5 ${isSpinTarget ? "bg-gold-500/25 ring-2 ring-gold-400" : isD ? "bg-black/40 ring-1 ring-gold-500/40" : isMe ? "bg-black/40 ring-1 ring-gold-500/50" : "bg-black/25"}`}>
                   <div className="flex items-center gap-2 mb-1.5">
                     <PlayerAvatar username={m.username} userId={m.user_id} size="sm" />
                     <div className="min-w-0">
                       <p className="text-[11px] font-semibold truncate flex items-center gap-1 text-white">
                         {isMe ? "You" : m.username}{isD && <span title="Dealer">👑</span>}
                       </p>
-                      <p className="text-xs font-mono text-gold-400">{fmtCents(totalCents(m.chipCounts))}</p>
+                      {isD ? (
+                        <p className={`text-xs font-mono ${m.chips < 0 ? "text-red-400" : "text-gold-400"}`}>{fmtCents(m.chips)}</p>
+                      ) : (
+                        <p className="text-xs font-mono text-gold-400">{fmtCents(totalCents(m.chipCounts))}</p>
+                      )}
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {sortedCounts(m.chipCounts).map(([v, c]) => (
-                      <span key={v} className="flex items-center">
-                        <Chip value={v} size={22} />
-                        <span className="text-[10px] text-white/70 ml-0.5">×{c}</span>
-                      </span>
-                    ))}
-                    {sortedCounts(m.chipCounts).length === 0 && <span className="text-[10px] text-white/40">no chips</span>}
-                  </div>
+                  {isD ? (
+                    <p className="text-[10px] text-white/40 uppercase tracking-wide">The house · net</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {sortedCounts(m.chipCounts).map(([v, c]) => (
+                        <span key={v} className="flex items-center">
+                          <Chip value={v} size={22} />
+                          <span className="text-[10px] text-white/70 ml-0.5">×{c}</span>
+                        </span>
+                      ))}
+                      {sortedCounts(m.chipCounts).length === 0 && <span className="text-[10px] text-white/40">no chips</span>}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -603,7 +644,14 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
 
                   {/* IDLE */}
                   {hand.phase === "idle" && (amDealer ? (
-                    <Button variant="gold" size="lg" className="w-full" onClick={newHand}>Deal New Hand</Button>
+                    <div className="space-y-2">
+                      <Button variant="gold" size="lg" className="w-full" onClick={newHand}>Deal New Hand</Button>
+                      {hand.lastHand && (
+                        <Button variant="outline" size="sm" className="w-full border-gold-500/40 text-gold-300" onClick={undoLastHand}>
+                          <RotateCcw className="w-3.5 h-3.5 mr-1.5" /> Undo Last Hand
+                        </Button>
+                      )}
+                    </div>
                   ) : (
                     <p className="text-center text-sm text-white/60 py-2">Waiting for the dealer to deal a new hand…</p>
                   ))}
