@@ -16,11 +16,11 @@ import { formatChips } from "@/lib/utils";
 import type { Database } from "@/lib/supabase";
 
 type Lobby = Database["public"]["Tables"]["lobbies"]["Row"];
-type Profile = Database["public"]["Tables"]["profiles"]["Row"];
 
 interface Member {
   user_id: string;
-  profile: Profile;
+  username: string;
+  chips: number; // per-room stack (not the global all-time total)
 }
 interface TransferRow {
   id: string;
@@ -51,18 +51,18 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
   const { toast } = useToast();
   const channelRef = useRef<ReturnType<ReturnType<typeof createClient>["channel"]> | null>(null);
 
-  const nameOf = (uid: string) => members.find((m) => m.user_id === uid)?.profile.username ?? "Player";
+  const nameOf = (uid: string) => members.find((m) => m.user_id === uid)?.username ?? "Player";
 
   const loadMembers = useCallback(async () => {
-    const { data } = await supabase.from("lobby_players").select("user_id").eq("lobby_id", lobby.id);
+    const { data } = await supabase.from("lobby_players").select("user_id, chips").eq("lobby_id", lobby.id);
     if (!data) return;
     const withProfiles = await Promise.all(
       data.map(async (lp) => {
-        const { data: profile } = await supabase.from("profiles").select("*").eq("id", lp.user_id).single();
-        return { user_id: lp.user_id, profile: profile! };
+        const { data: profile } = await supabase.from("profiles").select("username").eq("id", lp.user_id).single();
+        return { user_id: lp.user_id, username: profile?.username ?? "Player", chips: lp.chips ?? 0 };
       })
     );
-    setMembers(withProfiles.filter((m) => m.profile));
+    setMembers(withProfiles);
   }, [supabase, lobby.id]);
 
   const loadTransfers = useCallback(async () => {
@@ -85,7 +85,8 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
         .eq("user_id", currentUserId)
         .maybeSingle();
       if (!existing) {
-        await supabase.from("lobby_players").insert({ lobby_id: lobby.id, user_id: currentUserId });
+        // New member starts with a fresh stack = the room's buy-in
+        await supabase.from("lobby_players").insert({ lobby_id: lobby.id, user_id: currentUserId, chips: lobby.buy_in });
       }
       await Promise.all([loadMembers(), loadTransfers()]);
       setLoading(false);
@@ -116,6 +117,10 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
 
   const me = members.find((m) => m.user_id === currentUserId);
 
+  const denominations =
+    (lobby.tracker_config as { denominations?: { value: number; count: number }[] } | null)?.denominations ?? [];
+  const denomTotal = denominations.reduce((s, d) => s + d.value * d.count, 0);
+
   const handleSend = async () => {
     const amt = Number(amount);
     if (!recipient || !Number.isFinite(amt) || amt <= 0) {
@@ -137,7 +142,7 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
     channelRef.current?.send({
       type: "broadcast",
       event: "transfer",
-      payload: { from: me?.profile.username ?? "Someone", to: recipient, amount: Math.floor(amt) },
+      payload: { from: me?.username ?? "Someone", to: recipient, amount: Math.floor(amt) },
     });
     setAmount("");
     setRecipient(null);
@@ -193,9 +198,37 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
         {me && (
           <div className="casino-card p-5 text-center">
             <p className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Your chips</p>
-            <p className={`font-display text-4xl font-black ${me.profile.chip_balance < 0 ? "text-red-400" : "logo-gold"}`}>
-              {me.profile.chip_balance < 0 ? "−" : ""}{formatChips(Math.abs(me.profile.chip_balance))}
+            <p className={`font-display text-4xl font-black ${me.chips < 0 ? "text-red-400" : "logo-gold"}`}>
+              {me.chips < 0 ? "−" : ""}{formatChips(Math.abs(me.chips))}
             </p>
+          </div>
+        )}
+
+        {/* Physical chip set (Poker) */}
+        {denominations.length > 0 && (
+          <div className="casino-card p-5">
+            <h2 className="font-serif text-lg font-semibold mb-1 flex items-center gap-2">
+              <Coins className="w-4 h-4 text-gold-500" /> Buy-in Chip Set
+            </h2>
+            <p className="text-xs text-muted-foreground mb-3">
+              Each player&apos;s stack — divide your physical chips like this.
+            </p>
+            <div className="space-y-1.5">
+              {denominations.map((d, i) => (
+                <div key={i} className="flex items-center justify-between text-sm">
+                  <span className="flex items-center gap-2">
+                    <span className="font-mono text-gold-400 w-14">${d.value.toFixed(2)}</span>
+                    <span className="text-muted-foreground">× {d.count}</span>
+                  </span>
+                  <span className="font-mono text-muted-foreground">${(d.value * d.count).toFixed(2)}</span>
+                </div>
+              ))}
+              <div className="deco-divider"><span className="text-[10px]">◆</span></div>
+              <div className="flex items-center justify-between text-sm font-semibold">
+                <span>Total per player</span>
+                <span className="text-gold-400 font-mono">${denomTotal.toFixed(2)}</span>
+              </div>
+            </div>
           </div>
         )}
 
@@ -222,10 +255,10 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
                       recipient === m.user_id ? "bg-gold-500/15 ring-1 ring-gold-500/60" : "bg-muted/20 hover:bg-muted/40"
                     }`}
                   >
-                    <PlayerAvatar username={m.profile.username} userId={m.user_id} size="sm" />
-                    <span className="text-[11px] truncate w-full text-center">{m.profile.username}</span>
-                    <span className={`text-[10px] ${m.profile.chip_balance < 0 ? "text-red-400" : "text-muted-foreground"}`}>
-                      {m.profile.chip_balance < 0 ? "−" : ""}{formatChips(Math.abs(m.profile.chip_balance))}
+                    <PlayerAvatar username={m.username} userId={m.user_id} size="sm" />
+                    <span className="text-[11px] truncate w-full text-center">{m.username}</span>
+                    <span className={`text-[10px] ${m.chips < 0 ? "text-red-400" : "text-muted-foreground"}`}>
+                      {m.chips < 0 ? "−" : ""}{formatChips(Math.abs(m.chips))}
                     </span>
                   </button>
                 ))}

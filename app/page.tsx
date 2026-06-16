@@ -45,6 +45,15 @@ export default function HomePage() {
   const [trackerGame, setTrackerGame] = useState("Poker");
   const [trackerBuyIn, setTrackerBuyIn] = useState("500");
   const [trackerLoading, setTrackerLoading] = useState(false);
+  // Poker physical-chip denominations: counts per buy-in
+  const [denoms, setDenoms] = useState<{ value: number; count: number }[]>([
+    { value: 0.25, count: 8 },
+    { value: 0.5, count: 4 },
+    { value: 1, count: 10 },
+    { value: 5, count: 2 },
+  ]);
+  const isPokerTracker = trackerGame.trim().toLowerCase().includes("poker");
+  const denomTotal = denoms.reduce((s, d) => s + d.value * d.count, 0);
 
   const router = useRouter();
   const supabase = createClient();
@@ -135,6 +144,9 @@ export default function HomePage() {
         buy_in: Math.max(0, Number(trackerBuyIn) || 0),
         status: "tracking",
         game_type: "chip_tracker",
+        tracker_config: isPokerTracker
+          ? { denominations: denoms.filter((d) => d.count > 0 && d.value > 0) }
+          : null,
       })
       .select()
       .single();
@@ -145,7 +157,11 @@ export default function HomePage() {
       return;
     }
 
-    await supabase.from("lobby_players").insert({ lobby_id: lobby.id, user_id: user.id });
+    await supabase.from("lobby_players").insert({
+      lobby_id: lobby.id,
+      user_id: user.id,
+      chips: Math.max(0, Number(trackerBuyIn) || 0),
+    });
 
     setTrackerLoading(false);
     setShowTracker(false);
@@ -475,6 +491,70 @@ export default function HomePage() {
                 send them — balances are your real running total.
               </p>
             </div>
+
+            {/* Poker physical-chip denominations */}
+            {isPokerTracker && (
+              <div className="space-y-2 rounded-xl border border-gold-500/30 bg-gold-500/5 p-3">
+                <Label className="flex items-center justify-between">
+                  <span>Chip set per buy-in</span>
+                  <span className="text-gold-400 font-mono">${denomTotal.toFixed(2)}</span>
+                </Label>
+                <p className="text-[11px] text-muted-foreground">
+                  How each player&apos;s physical buy-in stack is divided. Shown to everyone at the table.
+                </p>
+                <div className="space-y-2">
+                  {denoms.map((d, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <div className="flex items-center gap-1 w-20">
+                        <span className="text-xs text-muted-foreground">$</span>
+                        <Input
+                          type="number"
+                          inputMode="decimal"
+                          step="0.05"
+                          min={0}
+                          value={d.value}
+                          onChange={(e) =>
+                            setDenoms((arr) => arr.map((x, j) => (j === i ? { ...x, value: Number(e.target.value) } : x)))
+                          }
+                          className="h-9 px-2"
+                        />
+                      </div>
+                      <span className="text-muted-foreground text-sm">×</span>
+                      <Input
+                        type="number"
+                        inputMode="numeric"
+                        min={0}
+                        value={d.count}
+                        onChange={(e) =>
+                          setDenoms((arr) => arr.map((x, j) => (j === i ? { ...x, count: Math.max(0, Math.floor(Number(e.target.value))) } : x)))
+                        }
+                        className="h-9 px-2 flex-1"
+                      />
+                      <span className="text-xs text-muted-foreground w-14 text-right">
+                        ${(d.value * d.count).toFixed(2)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setDenoms((arr) => arr.filter((_, j) => j !== i))}
+                        className="text-muted-foreground hover:text-destructive text-lg leading-none px-1"
+                        aria-label="Remove denomination"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="text-gold-400"
+                  onClick={() => setDenoms((arr) => [...arr, { value: 1, count: 1 }])}
+                >
+                  + Add denomination
+                </Button>
+              </div>
+            )}
 
             <Button type="submit" variant="gold" size="lg" className="w-full" disabled={trackerLoading || !trackerGame.trim()}>
               {trackerLoading ? (

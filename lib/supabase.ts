@@ -33,6 +33,7 @@ export type Database = {
           game_type: "coin_flip" | "higher_lower" | "blackjack" | "texas_holdem" | "three_card" | "free_bet" | "euchre" | "gabes_wilds" | "war" | "chip_tracker";
           dealer_id: string | null;
           carry_pot: number;
+          tracker_config: Record<string, unknown> | null;
           created_at: string;
         };
         Insert: {
@@ -45,6 +46,7 @@ export type Database = {
           buy_in: number;
           game_type?: "coin_flip" | "higher_lower" | "blackjack" | "texas_holdem" | "three_card" | "free_bet" | "euchre" | "gabes_wilds" | "war" | "chip_tracker";
           dealer_id?: string | null;
+          tracker_config?: Record<string, unknown> | null;
           created_at?: string;
         };
         Update: {
@@ -59,15 +61,17 @@ export type Database = {
           id: string;
           lobby_id: string;
           user_id: string;
+          chips: number;
           joined_at: string;
         };
         Insert: {
           id?: string;
           lobby_id: string;
           user_id: string;
+          chips?: number;
           joined_at?: string;
         };
-        Update: Record<string, never>;
+        Update: { chips?: number };
       };
       games: {
         Row: {
