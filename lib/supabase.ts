@@ -34,6 +34,7 @@ export type Database = {
           dealer_id: string | null;
           carry_pot: number;
           tracker_config: Record<string, unknown> | null;
+          tracker_state: Record<string, unknown> | null;
           created_at: string;
         };
         Insert: {
@@ -63,6 +64,7 @@ export type Database = {
           user_id: string;
           chips: number;
           chip_counts: Record<string, number> | null;
+          bet_cents: number;
           joined_at: string;
         };
         Insert: {
@@ -71,9 +73,10 @@ export type Database = {
           user_id: string;
           chips?: number;
           chip_counts?: Record<string, number> | null;
+          bet_cents?: number;
           joined_at?: string;
         };
-        Update: { chips?: number; chip_counts?: Record<string, number> | null };
+        Update: { chips?: number; chip_counts?: Record<string, number> | null; bet_cents?: number };
       };
       games: {
         Row: {
