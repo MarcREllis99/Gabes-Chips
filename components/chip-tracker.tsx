@@ -48,6 +48,20 @@ interface TransferRow {
   note: string | null;
   created_at: string;
 }
+type PokerPhase = "idle" | "preflop" | "flop" | "turn" | "river" | "showdown";
+interface PokerState {
+  phase: PokerPhase;
+  pot: number;                       // cents
+  sb: number; bb: number; ante: number; // cents
+  folded: string[];
+  ready: string[];
+  contrib: Record<string, number>;  // cents put in this hand
+  sbId: string | null;
+  bbId: string | null;
+}
+const STREET_LABEL: Record<PokerPhase, string> = {
+  idle: "Between hands", preflop: "Pre-Flop", flop: "Flop", turn: "Turn", river: "River", showdown: "Showdown",
+};
 
 interface Props {
   lobby: Lobby;
@@ -87,6 +101,30 @@ const totalCents = (counts: Record<string, number>) =>
 const fmtCents = (cents: number) => `${cents < 0 ? "−" : ""}$${(Math.abs(cents) / 100).toFixed(2)}`;
 
 export function ChipTracker({ lobby, currentUserId }: Props) {
+  const cfg = (lobby.tracker_config as { money?: boolean; game?: string; denominations?: { value: number; count: number }[] } | null) ?? {};
+  const denominations = cfg.denominations ?? [];
+  const denomMode = denominations.length > 0;
+  const isBlackjack = (cfg.game ?? "").toLowerCase().includes("blackjack");
+  const isPoker = denomMode && !isBlackjack;
+  // Poker blind defaults derived from the smallest denomination in the room.
+  const smallestCents = denominations.length ? Math.round(Math.min(...denominations.map((d) => d.value)) * 100) : 100;
+  const defaultBlinds = { sb: smallestCents, bb: smallestCents * 2, ante: 0 };
+  const parsePoker = (raw: unknown): PokerState => {
+    const r = (raw ?? {}) as Partial<PokerState>;
+    return {
+      phase: r.phase ?? "idle",
+      pot: r.pot ?? 0,
+      sb: r.sb ?? defaultBlinds.sb,
+      bb: r.bb ?? defaultBlinds.bb,
+      ante: r.ante ?? 0,
+      folded: r.folded ?? [],
+      ready: r.ready ?? [],
+      contrib: r.contrib ?? {},
+      sbId: r.sbId ?? null,
+      bbId: r.bbId ?? null,
+    };
+  };
+
   const [members, setMembers] = useState<Member[]>([]);
   const [transfers, setTransfers] = useState<TransferRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -99,6 +137,11 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
     () => (lobby.tracker_state as unknown as TrackerState) ?? { phase: "idle", results: {}, marked: [] }
   );
   const [betTray, setBetTray] = useState<Record<string, number>>({}); // player composing a bet
+  // poker hand state
+  const [poker, setPoker] = useState<PokerState>(() => parsePoker(lobby.tracker_state));
+  const [winners, setWinners] = useState<string[]>([]); // showdown selection
+  const [blinds, setBlinds] = useState({ sb: String(defaultBlinds.sb / 100), bb: String(defaultBlinds.bb / 100), ante: "0" });
+  const [savingBlinds, setSavingBlinds] = useState(false);
 
   // denom-mode composer
   const [target, setTarget] = useState<string | null>(null);
@@ -114,12 +157,7 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
   const { toast } = useToast();
   const channelRef = useRef<ReturnType<ReturnType<typeof createClient>["channel"]> | null>(null);
   const spinTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const cfg = (lobby.tracker_config as { money?: boolean; game?: string; denominations?: { value: number; count: number }[] } | null) ?? {};
-  const denominations = cfg.denominations ?? [];
-  const denomMode = denominations.length > 0;
-  const isBlackjack = (cfg.game ?? "").toLowerCase().includes("blackjack");
-  const moneyMode = denomMode; // denom rooms track real money
+  const prevPhaseRef = useRef<PokerPhase | null>(poker.phase);
 
   const startCounts = useCallback((): Record<string, number> => {
     const c: Record<string, number> = {};
@@ -186,6 +224,17 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
           const l = payload.new as Lobby;
           setDealerId(l.dealer_id);
           setHand((l.tracker_state as unknown as TrackerState) ?? { phase: "idle", results: {}, marked: [] });
+          if (isPoker) {
+            const np = parsePoker(l.tracker_state);
+            const prev = prevPhaseRef.current;
+            prevPhaseRef.current = np.phase;
+            setPoker(np);
+            if (prev && prev !== np.phase && (np.phase === "flop" || np.phase === "turn" || np.phase === "river")) {
+              toast({ title: `${STREET_LABEL[np.phase]} is out`, description: `Pot: ${fmtCents(np.pot)}` });
+            } else if (prev && prev !== "showdown" && np.phase === "showdown") {
+              toast({ title: "Showdown", description: "Time to award the pot." });
+            }
+          }
           loadMembers();
           loadTransfers();
         })
@@ -200,6 +249,12 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
     channelRef.current = channel;
     return () => { supabase.removeChannel(channel); channelRef.current = null; };
   }, [supabase, lobby.id, currentUserId, loadMembers, loadTransfers, toast]);
+
+  // Reflect the room's saved blind structure in the editor inputs
+  useEffect(() => {
+    if (!isPoker) return;
+    setBlinds({ sb: String(poker.sb / 100), bb: String(poker.bb / 100), ante: String(poker.ante / 100) });
+  }, [isPoker, poker.sb, poker.bb, poker.ante]);
 
   const me = members.find((m) => m.user_id === currentUserId);
   const others = members.filter((m) => m.user_id !== currentUserId);
@@ -422,6 +477,76 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
   const allMarked = others.filter((m) => m.betCents > 0).every((m) => hand.results[m.user_id]);
   const anyBet = others.some((m) => m.betCents > 0);
 
+  // ===== Poker hand flow =====
+  const amTableBoss = isPoker && (currentUserId === lobby.host_id || currentUserId === dealerId);
+  const iFolded = poker.folded.includes(currentUserId);
+  const iAmReady = poker.ready.includes(currentUserId);
+  const activeIds = members.filter((m) => !poker.folded.includes(m.user_id)).map((m) => m.user_id);
+  const readyCount = activeIds.filter((id) => poker.ready.includes(id)).length;
+  const maxContrib = members.reduce((mx, m) => Math.max(mx, poker.contrib[m.user_id] ?? 0), 0);
+  const toCall = Math.max(0, maxContrib - (poker.contrib[currentUserId] ?? 0));
+  const myStackCents = totalCents(me?.chipCounts ?? {});
+  const isBettingStreet = ["preflop", "flop", "turn", "river"].includes(poker.phase);
+
+  const refreshLobby = useCallback(async () => {
+    const { data } = await supabase.from("lobbies").select("dealer_id, tracker_state").eq("id", lobby.id).single();
+    if (data) {
+      setDealerId(data.dealer_id as string | null);
+      setPoker(parsePoker(data.tracker_state));
+      prevPhaseRef.current = (parsePoker(data.tracker_state)).phase;
+    }
+    await Promise.all([loadMembers(), loadTransfers()]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supabase, lobby.id, loadMembers, loadTransfers]);
+
+  const dealNewHand = async () => {
+    const sb = Math.round(parseFloat(blinds.sb || "0") * 100);
+    const bb = Math.round(parseFloat(blinds.bb || "0") * 100);
+    const ante = Math.round(parseFloat(blinds.ante || "0") * 100);
+    const { error } = await supabase.rpc("poker_new_hand", { p_lobby_id: lobby.id, p_sb: sb, p_bb: bb, p_ante: ante });
+    if (error) { toast({ title: "Couldn't deal", description: error.message, variant: "destructive" }); return; }
+    setBetTray({}); setWinners([]);
+    await refreshLobby();
+  };
+  const saveBlinds = async () => {
+    setSavingBlinds(true);
+    const sb = Math.round(parseFloat(blinds.sb || "0") * 100);
+    const bb = Math.round(parseFloat(blinds.bb || "0") * 100);
+    const ante = Math.round(parseFloat(blinds.ante || "0") * 100);
+    const { error } = await supabase.rpc("poker_set_blinds", { p_lobby_id: lobby.id, p_sb: sb, p_bb: bb, p_ante: ante });
+    if (error) toast({ title: "Couldn't save blinds", description: error.message, variant: "destructive" });
+    else toast({ title: "Blinds set", description: `${fmtCents(sb)} / ${fmtCents(bb)}${ante > 0 ? ` · ante ${fmtCents(ante)}` : ""}` });
+    await refreshLobby();
+    setSavingBlinds(false);
+  };
+  const postBet = async (cents: number) => {
+    if (!Number.isFinite(cents) || cents <= 0) { toast({ title: "Enter an amount", variant: "destructive" }); return; }
+    const { error } = await supabase.rpc("poker_post", { p_lobby_id: lobby.id, p_cents: Math.round(cents) });
+    if (error) { toast({ title: "Bet failed", description: error.message, variant: "destructive" }); return; }
+    setAmount("");
+    await refreshLobby();
+  };
+  const pokerCheck = async () => {
+    const { error } = await supabase.rpc("poker_act", { p_lobby_id: lobby.id, p_action: "check" });
+    if (error) { toast({ title: error.message, variant: "destructive" }); return; }
+    await refreshLobby();
+  };
+  const pokerFold = async () => {
+    const { error } = await supabase.rpc("poker_act", { p_lobby_id: lobby.id, p_action: "fold" });
+    if (error) { toast({ title: error.message, variant: "destructive" }); return; }
+    setAmount("");
+    await refreshLobby();
+  };
+  const toggleWinner = (uid: string) => setWinners((w) => (w.includes(uid) ? w.filter((x) => x !== uid) : [...w, uid]));
+  const awardPot = async () => {
+    if (winners.length === 0) { toast({ title: "Pick a winner", variant: "destructive" }); return; }
+    const { error } = await supabase.rpc("poker_award", { p_lobby_id: lobby.id, p_winners: winners });
+    if (error) { toast({ title: "Couldn't award pot", description: error.message, variant: "destructive" }); return; }
+    setWinners([]);
+    await refreshLobby();
+    toast({ title: "Pot awarded", description: `${fmtCents(poker.pot)} → ${winners.map(nameOf).join(", ")}` });
+  };
+
   const handleCopy = () => { navigator.clipboard.writeText(lobby.code); setCopied(true); setTimeout(() => setCopied(false), 2000); };
   const handleLeave = () => router.push("/");
 
@@ -520,28 +645,47 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
           <div className="grid grid-cols-2 gap-2 sm:gap-3">
             {members.map((m) => {
               const isMe = m.user_id === currentUserId;
-              const isD = m.user_id === dealerId;
+              const isHouse = isBlackjack && m.user_id === dealerId;     // blackjack: dealer is the bank
+              const isBtn = isPoker && m.user_id === dealerId;           // poker: dealer button
+              const isSB = isPoker && poker.sbId === m.user_id;
+              const isBB = isPoker && poker.bbId === m.user_id;
+              const pFolded = isPoker && poker.folded.includes(m.user_id);
+              const pReady = isPoker && poker.ready.includes(m.user_id);
+              const pContrib = isPoker ? (poker.contrib[m.user_id] ?? 0) : 0;
+              const pAllIn = isPoker && poker.phase !== "idle" && !pFolded && pContrib > 0 && totalCents(m.chipCounts) === 0;
               const isSpinTarget = spinning && members[spinIdx]?.user_id === m.user_id;
+              const highlight = isHouse || isBtn || isMe;
               return (
                 <div key={m.user_id}
-                  className={`rounded-xl p-2.5 ${isSpinTarget ? "bg-gold-500/25 ring-2 ring-gold-400" : isD ? "bg-black/40 ring-1 ring-gold-500/40" : isMe ? "bg-black/40 ring-1 ring-gold-500/50" : "bg-black/25"}`}>
+                  className={`rounded-xl p-2.5 transition-opacity ${pFolded ? "opacity-50" : ""} ${isSpinTarget ? "bg-gold-500/25 ring-2 ring-gold-400" : highlight ? "bg-black/40 ring-1 ring-gold-500/50" : "bg-black/25"}`}>
                   <div className="flex items-center gap-2 mb-1.5">
                     <PlayerAvatar username={m.username} userId={m.user_id} size="sm" />
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <p className="text-[11px] font-semibold truncate flex items-center gap-1 text-white">
-                        {isMe ? "You" : m.username}{isD && <span title="Dealer">👑</span>}
+                        {isMe ? "You" : m.username}{isHouse && <span title="Dealer">👑</span>}
+                        {isBtn && <span className="text-[8px] font-bold bg-white text-black rounded-full px-1 leading-tight" title="Dealer button">D</span>}
+                        {isSB && <span className="text-[8px] font-bold bg-blue-500 text-white rounded px-1 leading-tight">SB</span>}
+                        {isBB && <span className="text-[8px] font-bold bg-amber-500 text-black rounded px-1 leading-tight">BB</span>}
                       </p>
-                      {isD ? (
+                      {isHouse ? (
                         <p className={`text-xs font-mono ${m.chips < 0 ? "text-red-400" : "text-gold-400"}`}>{fmtCents(m.chips)}</p>
                       ) : (
                         <p className="text-xs font-mono text-gold-400">{fmtCents(totalCents(m.chipCounts))}</p>
                       )}
                     </div>
+                    {isPoker && poker.phase !== "idle" && (
+                      <span className="text-[9px] shrink-0 text-right leading-tight">
+                        {pFolded ? <span className="text-white/40">folded</span>
+                          : pAllIn ? <span className="text-red-400 font-bold">ALL IN</span>
+                          : pReady ? <span className="text-green-400">ready ✓</span>
+                          : <span className="text-white/30">…</span>}
+                      </span>
+                    )}
                   </div>
-                  {isD ? (
+                  {isHouse ? (
                     <p className="text-[10px] text-white/40 uppercase tracking-wide">The house · net</p>
                   ) : (
-                    <div className="flex flex-wrap gap-1.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       {sortedCounts(m.chipCounts).map(([v, c]) => (
                         <span key={v} className="flex items-center">
                           <Chip value={v} size={22} />
@@ -549,6 +693,9 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
                         </span>
                       ))}
                       {sortedCounts(m.chipCounts).length === 0 && <span className="text-[10px] text-white/40">no chips</span>}
+                      {isPoker && pContrib > 0 && (
+                        <span className="ml-auto text-[10px] font-mono text-gold-300/90" title="In the pot this hand">in {fmtCents(pContrib)}</span>
+                      )}
                     </div>
                   )}
                 </div>
@@ -556,65 +703,158 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
             })}
           </div>
 
-          {/* On-felt: chip handling */}
-          {/* POKER — free-form chip send */}
-          {!isBlackjack && (
-            <div className="mt-5 pt-4 border-t border-gold-500/15">
-              {others.length === 0 ? (
-                <p className="text-center text-sm text-white/60 py-2">Waiting for others — share <strong className="text-gold-400">{lobby.code}</strong>.</p>
-              ) : (
+          {/* On-felt: POKER — full hand flow */}
+          {isPoker && (
+            <div className="mt-5 pt-4 border-t border-gold-500/15 space-y-4">
+              {members.length < 2 ? (
+                <p className="text-center text-sm text-white/60 py-2">Waiting for players — share <strong className="text-gold-400">{lobby.code}</strong>. (2+ to deal)</p>
+              ) : poker.phase === "idle" ? (
                 <div className="space-y-4">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-gold-400/90 flex items-center gap-2"><Send className="w-3.5 h-3.5" /> Send Chips</p>
-                  <div>
-                    <p className="text-[11px] text-white/60 mb-2">Send to</p>
-                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-                      {others.map((m) => (
-                        <button key={m.user_id} type="button" onClick={() => { setTarget(m.user_id); setTray({}); }}
-                          className={`flex flex-col items-center gap-1 p-2 rounded-xl ${target === m.user_id ? "bg-gold-500/20 ring-1 ring-gold-400" : "bg-black/30"}`}>
-                          <PlayerAvatar username={m.username} userId={m.user_id} size="sm" />
-                          <span className="text-[11px] truncate w-full text-center text-white/90">{m.username}</span>
-                        </button>
-                      ))}
-                    </div>
+                  {/* Blinds / ante structure */}
+                  <div className="rounded-xl bg-black/30 border border-gold-500/20 p-3">
+                    <p className="text-[11px] uppercase tracking-wide text-gold-400/90 mb-2">Blinds &amp; Ante</p>
+                    {amTableBoss ? (
+                      <>
+                        <div className="grid grid-cols-3 gap-2">
+                          {([["sb", "Small blind"], ["bb", "Big blind"], ["ante", "Ante"]] as const).map(([k, label]) => (
+                            <label key={k} className="text-[10px] text-white/60">
+                              {label}
+                              <Input type="number" inputMode="decimal" min={0} step="0.01" value={blinds[k]}
+                                onChange={(e) => setBlinds((b) => ({ ...b, [k]: e.target.value }))}
+                                className="mt-1 h-8 text-sm" />
+                            </label>
+                          ))}
+                        </div>
+                        <Button variant="outline" size="sm" className="mt-2 w-full border-gold-500/30 text-gold-200" onClick={saveBlinds} disabled={savingBlinds}>
+                          {savingBlinds ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : null} Save blinds for the table
+                        </Button>
+                      </>
+                    ) : (
+                      <p className="text-sm text-white/80 font-mono">{fmtCents(poker.sb)} / {fmtCents(poker.bb)}{poker.ante > 0 ? ` · ante ${fmtCents(poker.ante)}` : ""}</p>
+                    )}
                   </div>
-                  {target && (
-                    <div>
-                      <p className="text-[11px] text-white/60 mb-2">Your chips — tap to add</p>
-                      <div className="flex flex-wrap gap-2">
-                        {sortedCounts(sourceCounts).map(([v]) => {
-                          const avail = availOf(String(v));
-                          return (
-                            <button key={v} type="button" disabled={avail <= 0} onClick={() => addToTray(String(v))}
-                              className={`flex items-center gap-1 rounded-lg px-1.5 py-1 ${avail > 0 ? "hover:bg-black/30 active:scale-95 transition-transform" : "opacity-40"}`}>
-                              <Chip value={v} size={30} /><span className="text-[10px] text-white/70">×{avail}</span>
-                            </button>
-                          );
-                        })}
-                        {sortedCounts(sourceCounts).length === 0 && <span className="text-xs text-white/50">No chips available.</span>}
-                      </div>
-                    </div>
+
+                  {amTableBoss ? (
+                    <Button variant="gold" size="lg" className="w-full" onClick={dealNewHand}>
+                      <Dices className="w-4 h-4 mr-2" /> Deal New Hand
+                    </Button>
+                  ) : (
+                    <p className="text-center text-sm text-white/60 py-1">
+                      Waiting for {dealerId ? nameOf(dealerId) : "the host"} to deal the next hand…
+                    </p>
                   )}
-                  {target && (
-                    <div className="rounded-xl bg-black/30 border border-gold-500/20 p-3 min-h-[64px]">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-[11px] text-white/60">Sending — tap to remove</span>
-                        <span className="text-gold-400 font-mono font-semibold">{fmtCents(trayCents)}</span>
-                      </div>
-                      {trayCents > 0 ? (
-                        <div className="flex flex-wrap gap-2">
-                          {Object.entries(tray).filter(([, c]) => c > 0).map(([v, c]) => (
-                            <button key={v} type="button" onClick={() => removeFromTray(v)} className="flex items-center gap-1">
-                              <Chip value={Number(v)} size={28} /><span className="text-[10px] text-white/70">×{c}</span>
+
+                  {/* Off-hand chip pass (rebuys / settling up) */}
+                  {others.length > 0 && (
+                    <details className="rounded-xl bg-black/20 border border-gold-500/10 p-3">
+                      <summary className="cursor-pointer text-[11px] uppercase tracking-wide text-white/50 flex items-center gap-2"><Send className="w-3.5 h-3.5" /> Pass chips (off the hand)</summary>
+                      <div className="mt-3 space-y-3">
+                        <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                          {others.map((m) => (
+                            <button key={m.user_id} type="button" onClick={() => { setTarget(m.user_id); setTray({}); }}
+                              className={`flex flex-col items-center gap-1 p-2 rounded-xl ${target === m.user_id ? "bg-gold-500/20 ring-1 ring-gold-400" : "bg-black/30"}`}>
+                              <PlayerAvatar username={m.username} userId={m.user_id} size="sm" />
+                              <span className="text-[11px] truncate w-full text-center text-white/90">{m.username}</span>
                             </button>
                           ))}
                         </div>
-                      ) : <p className="text-[11px] text-white/40">Tap your chips above to add them here.</p>}
+                        {target && (
+                          <div className="flex flex-wrap gap-2">
+                            {sortedCounts(sourceCounts).map(([v]) => {
+                              const avail = availOf(String(v));
+                              return (
+                                <button key={v} type="button" disabled={avail <= 0} onClick={() => addToTray(String(v))}
+                                  className={`flex items-center gap-1 rounded-lg px-1.5 py-1 ${avail > 0 ? "hover:bg-black/30 active:scale-95 transition-transform" : "opacity-40"}`}>
+                                  <Chip value={v} size={28} /><span className="text-[10px] text-white/70">×{avail}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                        <Button variant="gold" size="sm" className="w-full" onClick={sendTray} disabled={sending || !target || trayCents <= 0}>
+                          {sending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />}
+                          Pass{trayCents > 0 ? ` ${fmtCents(trayCents)}` : ""}
+                        </Button>
+                      </div>
+                    </details>
+                  )}
+                </div>
+              ) : poker.phase === "showdown" ? (
+                <div className="space-y-3">
+                  <div className="rounded-xl bg-black/40 border border-gold-500/30 p-3 text-center">
+                    <p className="text-[11px] uppercase tracking-wide text-white/60">Pot</p>
+                    <p className="text-gold-400 font-mono font-bold text-2xl">{fmtCents(poker.pot)}</p>
+                  </div>
+                  {amTableBoss ? (
+                    <>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-gold-400/90">Who won? Tap winner(s)</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        {members.filter((m) => !poker.folded.includes(m.user_id)).map((m) => (
+                          <button key={m.user_id} type="button" onClick={() => toggleWinner(m.user_id)}
+                            className={`flex items-center gap-2 p-2 rounded-xl ${winners.includes(m.user_id) ? "bg-gold-500/25 ring-1 ring-gold-400" : "bg-black/30"}`}>
+                            <PlayerAvatar username={m.username} userId={m.user_id} size="sm" />
+                            <span className="text-[12px] truncate text-white/90">{m.user_id === currentUserId ? "You" : m.username}</span>
+                            {winners.includes(m.user_id) && <Check className="w-3.5 h-3.5 text-gold-300 ml-auto shrink-0" />}
+                          </button>
+                        ))}
+                      </div>
+                      <Button variant="gold" size="lg" className="w-full" onClick={awardPot} disabled={winners.length === 0}>
+                        Award pot{winners.length > 1 ? ` (split ${winners.length} ways)` : ""}
+                      </Button>
+                    </>
+                  ) : (
+                    <p className="text-center text-sm text-white/60 py-1">Showdown — {dealerId ? nameOf(dealerId) : "the dealer"} is awarding the pot…</p>
+                  )}
+                </div>
+              ) : (
+                /* A betting street: preflop / flop / turn / river */
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-gold-400/90">{STREET_LABEL[poker.phase]}</span>
+                    <span className="text-[11px] text-white/50">{readyCount}/{activeIds.length} ready</span>
+                  </div>
+                  <div className="rounded-xl bg-black/40 border border-gold-500/30 p-3 text-center">
+                    <p className="text-[11px] uppercase tracking-wide text-white/60">Pot</p>
+                    <p className="text-gold-400 font-mono font-bold text-2xl">{fmtCents(poker.pot)}</p>
+                  </div>
+
+                  {iFolded ? (
+                    <p className="text-center text-sm text-white/50 py-2">You folded this hand.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between text-[12px]">
+                        <span className="text-white/70">Your stack <span className="font-mono text-gold-400">{fmtCents(myStackCents)}</span></span>
+                        {toCall > 0 ? <span className="text-white/70">To call <span className="font-mono text-amber-300">{fmtCents(toCall)}</span></span>
+                          : <span className="text-green-400/80">No bet to call</span>}
+                      </div>
+
+                      {/* Bet / raise amount */}
+                      <div className="flex flex-wrap gap-1.5">
+                        {toCall > 0 && toCall <= myStackCents && (
+                          <Button variant="outline" size="sm" className="border-amber-400/40 text-amber-200" onClick={() => postBet(toCall)}>Call {fmtCents(toCall)}</Button>
+                        )}
+                        {poker.bb > 0 && (
+                          <Button variant="outline" size="sm" className="border-gold-500/30 text-gold-200" onClick={() => setAmount(String((toCall + poker.bb) / 100))}>+ BB</Button>
+                        )}
+                        <Button variant="outline" size="sm" className="border-gold-500/30 text-gold-200" onClick={() => setAmount(String(myStackCents / 100))}>All-in</Button>
+                      </div>
+                      <div className="flex gap-2">
+                        <Input type="number" inputMode="decimal" min={0} step="0.01" placeholder="Bet / raise to…" value={amount}
+                          onChange={(e) => setAmount(e.target.value)} className="flex-1" />
+                        <Button variant="gold" onClick={() => postBet(Math.round(parseFloat(amount || "0") * 100))} disabled={!amount || parseFloat(amount) <= 0}>
+                          Bet
+                        </Button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 pt-1">
+                        <Button variant="casino" size="lg" onClick={pokerCheck} disabled={iAmReady}>
+                          {iAmReady ? "Ready ✓" : toCall > 0 ? "Call done · Ready" : "Check / Ready"}
+                        </Button>
+                        <Button variant="outline" size="lg" className="border-destructive/40 text-destructive hover:bg-destructive/10" onClick={pokerFold}>Fold</Button>
+                      </div>
+                      {iAmReady && <p className="text-center text-[11px] text-white/40">Waiting for the rest of the table…</p>}
                     </div>
                   )}
-                  <Button variant="gold" size="lg" className="w-full" onClick={sendTray} disabled={sending || !target || trayCents <= 0}>
-                    {sending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />}
-                    Send chips{trayCents > 0 ? ` (${fmtCents(trayCents)})` : ""}
-                  </Button>
                 </div>
               )}
             </div>
@@ -784,19 +1024,19 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
         {/* Transfer log / hand history */}
         <div className="casino-card p-5">
           <h2 className="font-serif text-lg font-semibold mb-3 flex items-center gap-2">
-            <History className="w-4 h-4 text-gold-500" /> {isBlackjack ? "Hand History" : "Recent Transfers"}
+            <History className="w-4 h-4 text-gold-500" /> {isBlackjack || isPoker ? "Hand History" : "Recent Transfers"}
           </h2>
           {transfers.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-2">{isBlackjack ? "No hands played yet." : "No chips moved yet."}</p>
+            <p className="text-sm text-muted-foreground text-center py-2">{isBlackjack || isPoker ? "No hands played yet." : "No chips moved yet."}</p>
           ) : (
             <div className="divide-y divide-border/40">
               {transfers.map((t) => {
                 if (t.note) {
-                  // Blackjack hand outcome
+                  // Hand outcome (blackjack: won/lost/blackjack · poker: pot)
                   const player = t.note === "lost" ? t.from_user : t.to_user;
                   const who = player === currentUserId ? "You" : nameOf(player);
                   const color = t.note === "lost" ? "text-red-400" : t.note === "blackjack" ? "text-gold-400" : "text-green-400";
-                  const label = t.note === "blackjack" ? "blackjack" : t.note;
+                  const label = t.note === "blackjack" ? "blackjack" : t.note === "pot" ? "won pot" : t.note;
                   const sign = t.note === "lost" ? "−" : "+";
                   return (
                     <div key={t.id} className="flex items-center justify-between py-2 text-sm">
