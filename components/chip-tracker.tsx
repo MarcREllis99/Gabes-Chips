@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Toaster } from "@/components/ui/toaster";
 import { useToast } from "@/components/ui/use-toast";
 import {
-  Copy, Check, Loader2, Send, DoorOpen, History, ArrowRight, Spade, Dices,
+  Copy, Check, Loader2, Send, DoorOpen, History, ArrowRight, Dices,
 } from "lucide-react";
 import { formatChips } from "@/lib/utils";
 import type { Database } from "@/lib/supabase";
@@ -330,18 +330,19 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
       <main className="max-w-2xl mx-auto px-4 py-6 pb-safe space-y-5">
         {Header}
 
-        {/* Felt table */}
-        <div className="bj-table px-3 sm:px-6 pt-6 pb-10">
+        {/* Felt table — players AND chip handling all happen here */}
+        <div className="bj-table px-3 sm:px-5 pt-6 pb-12">
+          {/* Center logo — matches the main menu */}
           <div className="flex flex-col items-center text-center mb-5 select-none">
-            <div className="w-10 h-10 rotate-45 bg-black/30 border border-gold-500/50 flex items-center justify-center mb-2">
-              <Spade className="w-5 h-5 text-gold-400 -rotate-45" />
-            </div>
-            <p className="font-display text-lg sm:text-xl font-black uppercase logo-gold leading-none">Gabe&apos;s Chips</p>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo.png" alt="Gabe's Chips" className="w-16 h-16 object-contain mb-1" />
+            <p className="font-display text-xl sm:text-2xl font-black uppercase logo-gold leading-none">Gabe&apos;s Chips</p>
             <p className="text-[10px] tracking-[0.2em] uppercase text-white/40 mt-1">
               {cfg.game} · {fmtCents(members.reduce((s, m) => s + totalCents(m.chipCounts), 0))} in play
             </p>
           </div>
 
+          {/* Players + their chip stacks */}
           <div className="grid grid-cols-2 gap-2 sm:gap-3">
             {members.map((m) => {
               const isMe = m.user_id === currentUserId;
@@ -353,7 +354,7 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
                   <div className="flex items-center gap-2 mb-1.5">
                     <PlayerAvatar username={m.username} userId={m.user_id} size="sm" />
                     <div className="min-w-0">
-                      <p className="text-[11px] font-semibold truncate flex items-center gap-1">
+                      <p className="text-[11px] font-semibold truncate flex items-center gap-1 text-white">
                         {isMe ? "You" : m.username}{isD && <span title="Dealer">👑</span>}
                       </p>
                       <p className="text-xs font-mono text-gold-400">{fmtCents(totalCents(m.chipCounts))}</p>
@@ -372,109 +373,109 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
               );
             })}
           </div>
-        </div>
 
-        {/* Blackjack: dealer roulette */}
-        {isBlackjack && (
-          <div className="casino-card p-4">
-            <div className="flex items-center justify-between gap-3">
+          {/* On-felt: dealer roulette (blackjack) */}
+          {isBlackjack && (
+            <div className="mt-5 pt-4 border-t border-gold-500/15 flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <p className="font-serif font-semibold flex items-center gap-2"><Dices className="w-4 h-4 text-gold-500" /> Dealer</p>
-                <p className="text-xs text-muted-foreground">
-                  {hasDealer ? <>👑 {dealerId === currentUserId ? "You are" : `${nameOf(dealerId!)} is`} the dealer — they give &amp; take chips.</> : "No dealer yet — spin to pick one."}
+                <p className="text-sm font-semibold text-white flex items-center gap-2"><Dices className="w-4 h-4 text-gold-400" /> Dealer</p>
+                <p className="text-[11px] text-white/60">
+                  {hasDealer ? <>👑 {dealerId === currentUserId ? "You" : nameOf(dealerId!)} — gives &amp; takes chips.</> : "No dealer yet — spin to pick one."}
                 </p>
               </div>
-              <Button variant="casino" onClick={spinDealer} disabled={spinning || members.length < 2}>
-                <Dices className="w-4 h-4 mr-2" />{hasDealer ? "Re-spin" : "Spin"}
+              <Button variant="casino" size="sm" onClick={spinDealer} disabled={spinning || members.length < 2}>
+                <Dices className="w-4 h-4 mr-1.5" />{hasDealer ? "Re-spin" : "Spin"}
               </Button>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* Composer */}
-        {isBlackjack && !amDealer ? (
-          <div className="casino-card p-5 text-center text-sm text-muted-foreground">
-            {hasDealer ? "The dealer manages the chips this round." : "Waiting for a dealer to be picked."}
-          </div>
-        ) : (
-          <div className="casino-card p-5 space-y-4">
-            <h2 className="font-serif text-lg font-semibold flex items-center gap-2">
-              <Send className="w-4 h-4 text-gold-500" /> {isBlackjack ? "Dealer Chips" : "Send Chips"}
-            </h2>
-
-            {others.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-2">Waiting for others — share <strong className="text-gold-400">{lobby.code}</strong>.</p>
+          {/* On-felt: chip handling */}
+          <div className="mt-5 pt-4 border-t border-gold-500/15">
+            {isBlackjack && !amDealer ? (
+              <p className="text-center text-sm text-white/60 py-2">
+                {hasDealer ? "The dealer manages the chips this round." : "Waiting for a dealer to be picked."}
+              </p>
+            ) : others.length === 0 ? (
+              <p className="text-center text-sm text-white/60 py-2">Waiting for others — share <strong className="text-gold-400">{lobby.code}</strong>.</p>
             ) : (
-              <>
+              <div className="space-y-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-gold-400/90 flex items-center gap-2">
+                  <Send className="w-3.5 h-3.5" /> {isBlackjack ? "Dealer Chips" : "Send Chips"}
+                </p>
+
                 {/* pick player */}
                 <div>
-                  <p className="text-xs text-muted-foreground mb-2">{isBlackjack ? "Player" : "Send to"}</p>
+                  <p className="text-[11px] text-white/60 mb-2">{isBlackjack ? "Player" : "Send to"}</p>
                   <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
                     {others.map((m) => (
                       <button key={m.user_id} type="button" onClick={() => { setTarget(m.user_id); setTray({}); }}
-                        className={`flex flex-col items-center gap-1 p-2 rounded-xl ${target === m.user_id ? "bg-gold-500/15 ring-1 ring-gold-500/60" : "bg-muted/20"}`}>
+                        className={`flex flex-col items-center gap-1 p-2 rounded-xl ${target === m.user_id ? "bg-gold-500/20 ring-1 ring-gold-400" : "bg-black/30"}`}>
                         <PlayerAvatar username={m.username} userId={m.user_id} size="sm" />
-                        <span className="text-[11px] truncate w-full text-center">{m.username}</span>
+                        <span className="text-[11px] truncate w-full text-center text-white/90">{m.username}</span>
                       </button>
                     ))}
                   </div>
                 </div>
 
-                {/* blackjack give/take toggle */}
+                {/* give/take (blackjack dealer) */}
                 {isBlackjack && target && (
                   <div className="grid grid-cols-2 gap-2">
-                    <Button variant={mode === "give" ? "gold" : "outline"} size="sm" onClick={() => { setMode("give"); setTray({}); }}>Give to {nameOf(target)}</Button>
-                    <Button variant={mode === "take" ? "gold" : "outline"} size="sm" onClick={() => { setMode("take"); setTray({}); }}>Take from {nameOf(target)}</Button>
+                    <Button variant={mode === "give" ? "gold" : "outline"} size="sm" onClick={() => { setMode("give"); setTray({}); }}>Give</Button>
+                    <Button variant={mode === "take" ? "gold" : "outline"} size="sm" onClick={() => { setMode("take"); setTray({}); }}>Take</Button>
                   </div>
                 )}
 
                 {/* source chips */}
                 {target && (
                   <div>
-                    <p className="text-xs text-muted-foreground mb-2">
-                      {isBlackjack ? (mode === "give" ? "Your chips (tap to give)" : `${nameOf(target)}'s chips (tap to take)`) : "Your chips (tap to add)"}
+                    <p className="text-[11px] text-white/60 mb-2">
+                      {isBlackjack ? (mode === "give" ? "Your chips — tap to give" : `${nameOf(target)}'s chips — tap to take`) : "Your chips — tap to add"}
                     </p>
                     <div className="flex flex-wrap gap-2">
                       {sortedCounts(sourceCounts).map(([v]) => {
                         const avail = availOf(String(v));
                         return (
                           <button key={v} type="button" disabled={avail <= 0} onClick={() => addToTray(String(v))}
-                            className={`flex items-center gap-1 rounded-lg px-1.5 py-1 ${avail > 0 ? "hover:bg-muted/40" : "opacity-40"}`}>
-                            <Chip value={v} size={28} />
-                            <span className="text-[10px] text-muted-foreground">×{avail}</span>
+                            className={`flex items-center gap-1 rounded-lg px-1.5 py-1 ${avail > 0 ? "hover:bg-black/30 active:scale-95 transition-transform" : "opacity-40"}`}>
+                            <Chip value={v} size={30} />
+                            <span className="text-[10px] text-white/70">×{avail}</span>
                           </button>
                         );
                       })}
-                      {sortedCounts(sourceCounts).length === 0 && <span className="text-xs text-muted-foreground">No chips available.</span>}
+                      {sortedCounts(sourceCounts).length === 0 && <span className="text-xs text-white/50">No chips available.</span>}
                     </div>
                   </div>
                 )}
 
-                {/* tray */}
-                {target && trayCents > 0 && (
-                  <div className="rounded-xl bg-muted/20 p-3">
+                {/* tray — the pot in the middle of the felt */}
+                {target && (
+                  <div className="rounded-xl bg-black/30 border border-gold-500/20 p-3 min-h-[64px]">
                     <div className="flex items-center justify-between mb-2">
-                      <span className="text-xs text-muted-foreground">Selected (tap to remove)</span>
+                      <span className="text-[11px] text-white/60">{isBlackjack && mode === "take" ? "Taking" : "Sending"} — tap to remove</span>
                       <span className="text-gold-400 font-mono font-semibold">{fmtCents(trayCents)}</span>
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      {Object.entries(tray).filter(([, c]) => c > 0).map(([v, c]) => (
-                        <button key={v} type="button" onClick={() => removeFromTray(v)} className="flex items-center gap-1">
-                          <Chip value={Number(v)} size={26} /><span className="text-[10px] text-white/70">×{c}</span>
-                        </button>
-                      ))}
-                    </div>
+                    {trayCents > 0 ? (
+                      <div className="flex flex-wrap gap-2">
+                        {Object.entries(tray).filter(([, c]) => c > 0).map(([v, c]) => (
+                          <button key={v} type="button" onClick={() => removeFromTray(v)} className="flex items-center gap-1">
+                            <Chip value={Number(v)} size={28} /><span className="text-[10px] text-white/70">×{c}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-white/40">Tap your chips above to add them here.</p>
+                    )}
                   </div>
                 )}
 
                 <Button variant="gold" size="lg" className="w-full" onClick={sendTray} disabled={sending || !canCompose || trayCents <= 0}>
                   {sending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />}
-                  {isBlackjack ? (mode === "give" ? "Give chips" : "Take chips") : "Send chips"} {trayCents > 0 ? `(${fmtCents(trayCents)})` : ""}
+                  {isBlackjack ? (mode === "give" ? "Give chips" : "Take chips") : "Send chips"}{trayCents > 0 ? ` (${fmtCents(trayCents)})` : ""}
                 </Button>
-              </>
+              </div>
             )}
           </div>
-        )}
+        </div>
 
         {/* Transfer log */}
         <div className="casino-card p-5">
