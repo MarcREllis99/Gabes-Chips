@@ -156,7 +156,7 @@ export default function LobbyPage() {
   const hasDealer = isDealerGame && !!dealerPlayer;
   // A human dealer needs at least one other player to bank against
   const minPlayers = lobby
-    ? (hasDealer ? 2 : GAME_INFO[lobby.game_type].minPlayers)
+    ? (hasDealer ? 2 : (GAME_INFO[lobby.game_type]?.minPlayers ?? 2))
     : 2;
 
   // Animate a roulette spin whenever the dealer changes (for everyone)
