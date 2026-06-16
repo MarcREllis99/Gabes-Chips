@@ -155,7 +155,7 @@ export default function HomePage() {
         status: "tracking",
         game_type: "chip_tracker",
         tracker_config: isDenomTracker
-          ? { money: true, denominations: cleanDenoms }
+          ? { money: true, game: trackerGame.trim(), denominations: cleanDenoms }
           : null,
       })
       .select()
@@ -167,10 +167,19 @@ export default function HomePage() {
       return;
     }
 
+    // Each player's starting stack = the configured chip set, by denomination
+    const startCounts: Record<string, number> = {};
+    if (isDenomTracker) {
+      for (const d of cleanDenoms) {
+        startCounts[String(d.value)] = (startCounts[String(d.value)] ?? 0) + d.count;
+      }
+    }
+
     await supabase.from("lobby_players").insert({
       lobby_id: lobby.id,
       user_id: user.id,
       chips: buyInUnits,
+      chip_counts: isDenomTracker ? startCounts : null,
     });
 
     setTrackerLoading(false);

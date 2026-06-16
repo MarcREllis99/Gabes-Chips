@@ -62,6 +62,7 @@ export type Database = {
           lobby_id: string;
           user_id: string;
           chips: number;
+          chip_counts: Record<string, number> | null;
           joined_at: string;
         };
         Insert: {
@@ -69,9 +70,10 @@ export type Database = {
           lobby_id: string;
           user_id: string;
           chips?: number;
+          chip_counts?: Record<string, number> | null;
           joined_at?: string;
         };
-        Update: { chips?: number };
+        Update: { chips?: number; chip_counts?: Record<string, number> | null };
       };
       games: {
         Row: {
