@@ -45,6 +45,7 @@ export default function LobbyPage() {
   const [stakeInput, setStakeInput] = useState("100");
   const [spinning, setSpinning] = useState(false);
   const [spinIndex, setSpinIndex] = useState(0);
+  const [assignDealerOpen, setAssignDealerOpen] = useState(false);
 
   const router = useRouter();
   const supabase = createClient();
@@ -204,6 +205,19 @@ export default function LobbyPage() {
     if (error) {
       toast({ title: "Couldn't pick a dealer", description: error.message, variant: "destructive" });
     }
+  };
+
+  const handleAssignDealer = async (uid: string) => {
+    if (!lobby || !isHost) return;
+    setAssignDealerOpen(false);
+    const { error } = await supabase.from("lobbies").update({ dealer_id: uid }).eq("id", lobby.id);
+    if (error) toast({ title: "Couldn't assign dealer", description: error.message, variant: "destructive" });
+  };
+
+  const handleClearDealer = async () => {
+    if (!lobby || !isHost) return;
+    const { error } = await supabase.from("lobbies").update({ dealer_id: null }).eq("id", lobby.id);
+    if (error) toast({ title: "Couldn't clear dealer", description: error.message, variant: "destructive" });
   };
 
   const handleJoin = async () => {
@@ -470,11 +484,11 @@ export default function LobbyPage() {
           <div className="casino-card p-6 mb-6">
             <h2 className="font-serif text-lg font-semibold mb-1 flex items-center gap-2">
               <Dices className="w-4 h-4 text-gold-500" />
-              Dealer Roulette
+              Pick a Dealer
             </h2>
             <p className="text-xs text-muted-foreground mb-4">
-              Can&apos;t decide who deals? Spin to pick a dealer — they buy in like everyone
-              else and bank the table, winning or losing chips against the other players.
+              Assign a dealer yourself or spin the roulette. The dealer buys in like
+              everyone else and banks the table — or play with no dealer and the automated house deals.
             </p>
 
             {/* Spinner stage */}
@@ -518,21 +532,46 @@ export default function LobbyPage() {
             </div>
 
             {isHost && (
-              <Button
-                variant="casino"
-                size="lg"
-                className="w-full"
-                onClick={handleSpinDealer}
-                disabled={spinning || players.length < 2}
-              >
-                <Dices className="w-4 h-4 mr-2" />
-                {hasDealer ? "Re-spin Dealer" : "Spin for Dealer"}
-              </Button>
-            )}
-            {isHost && players.length < 2 && (
-              <p className="text-xs text-muted-foreground text-center mt-2">
-                Need 2+ players to pick a dealer
-              </p>
+              <>
+                {assignDealerOpen ? (
+                  <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground text-center">Tap a player to make them the dealer</p>
+                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                      {players.map((lp) => (
+                        <button
+                          key={lp.user_id}
+                          type="button"
+                          onClick={() => handleAssignDealer(lp.user_id)}
+                          className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-colors ${
+                            lobby.dealer_id === lp.user_id ? "bg-gold-500/20 ring-1 ring-gold-400" : "bg-muted/20 hover:bg-muted/40"
+                          }`}
+                        >
+                          <PlayerAvatar username={lp.profile.username} userId={lp.user_id} size="sm" isHost={lp.user_id === lobby.host_id} />
+                          <span className="text-[11px] truncate w-full text-center">{lp.user_id === currentUser?.id ? "You" : lp.profile.username}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <Button variant="ghost" size="sm" className="w-full" onClick={() => setAssignDealerOpen(false)}>Cancel</Button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button variant="gold" size="lg" onClick={() => setAssignDealerOpen(true)} disabled={players.length < 2}>
+                      <Crown className="w-4 h-4 mr-2" /> {hasDealer ? "Change Dealer" : "Assign Dealer"}
+                    </Button>
+                    <Button variant="casino" size="lg" onClick={handleSpinDealer} disabled={spinning || players.length < 2}>
+                      <Dices className="w-4 h-4 mr-2" /> {hasDealer ? "Re-spin" : "Spin"}
+                    </Button>
+                  </div>
+                )}
+                {hasDealer && !assignDealerOpen && (
+                  <Button variant="ghost" size="sm" className="w-full mt-2 text-muted-foreground" onClick={handleClearDealer}>
+                    Play without a dealer (automated house)
+                  </Button>
+                )}
+                {players.length < 2 && (
+                  <p className="text-xs text-muted-foreground text-center mt-2">Need 2+ players to pick a dealer</p>
+                )}
+              </>
             )}
           </div>
         )}

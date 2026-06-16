@@ -8,10 +8,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Toaster } from "@/components/ui/toaster";
 import { useToast } from "@/components/ui/use-toast";
-import { Loader2, Plus, Hand, Spade, Coins, DoorClosed } from "lucide-react";
+import { Loader2, Plus, Hand, Coins, DoorClosed, Copy, SplitSquareHorizontal } from "lucide-react";
 import { formatChips } from "@/lib/utils";
 import {
   type BlackjackState,
+  type BlackjackPlayerHand,
   type BlackjackOutcome,
   initBlackjackTable,
   setBet,
@@ -19,6 +20,11 @@ import {
   dealHand,
   hitPlayer,
   standPlayer,
+  doubleDown,
+  canDouble,
+  splitHand,
+  canSplit,
+  activeHandIndex,
   allPlayersDone,
   revealDealer,
   resolveDealer,
@@ -55,7 +61,36 @@ const OUTCOME_CLASS: Record<BlackjackOutcome, string> = {
 
 function arcDrop(index: number, count: number): number {
   if (count <= 1) return 0;
-  return Math.round(Math.sin((index / (count - 1)) * Math.PI) * 22);
+  return Math.round(Math.sin((index / (count - 1)) * Math.PI) * 18);
+}
+
+function HandView({ ph, active, size }: { ph: BlackjackPlayerHand; active: boolean; size: "sm" | "md" }) {
+  const value = handValue(ph.hand);
+  const bj = !ph.fromSplit && isBlackjack(ph.hand);
+  return (
+    <div className={`flex flex-col items-center gap-1 rounded-lg p-1 ${active ? "ring-2 ring-gold-400 bg-gold-500/10" : ""}`}>
+      <div className="flex justify-center">
+        {ph.hand.map((card, j) => (
+          <div key={j} className={j > 0 ? (size === "sm" ? "-ml-7" : "-ml-8") : ""}>
+            <PlayingCard rank={card.display} suit={card.suit} size={size} highlight={value === 21} />
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center gap-1">
+        <span className={`text-base font-bold leading-none ${value > 21 ? "text-red-400" : value === 21 ? "text-gold-400" : "text-white"}`}>{value}</span>
+        {ph.doubled && <span className="text-[9px] font-bold text-blue-300 bg-blue-400/15 px-1 rounded-full">2×</span>}
+        {ph.outcome ? (
+          <span className={`text-[9px] font-bold border px-1 py-0.5 rounded-full ${OUTCOME_CLASS[ph.outcome]}`}>{OUTCOME_LABEL[ph.outcome]}</span>
+        ) : (
+          <>
+            {bj && <span className="text-[9px] font-bold text-gold-400 bg-gold-400/15 px-1 rounded-full">BJ!</span>}
+            {ph.busted && <span className="text-[9px] font-bold text-red-400 bg-red-400/15 px-1 rounded-full">BUST</span>}
+            {ph.standing && !ph.busted && !bj && <span className="text-[9px] font-bold text-blue-400 bg-blue-400/15 px-1 rounded-full">STAND</span>}
+          </>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function BlackjackGame({ game, lobby, players, currentUser, onGameEnd }: Props) {
@@ -70,9 +105,9 @@ export function BlackjackGame({ game, lobby, players, currentUser, onGameEnd }: 
   const { toast } = useToast();
   const myId = currentUser.id;
   const dealerId = lobby.dealer_id;
-  const boss = dealerId ?? lobby.host_id;       // runs the table (deal/next/end)
+  const boss = dealerId ?? lobby.host_id;
   const amBoss = myId === boss;
-  const amApprover = myId === boss || myId === lobby.host_id; // can approve rebuys
+  const amApprover = myId === boss || myId === lobby.host_id;
   const isDealerMe = !!dealerId && dealerId === myId;
   const dealerProfile = dealerId ? players.find((p) => p.id === dealerId) : undefined;
   const nameOf = (id: string) => players.find((p) => p.id === id)?.username ?? "Player";
@@ -91,10 +126,7 @@ export function BlackjackGame({ game, lobby, players, currentUser, onGameEnd }: 
     dealerStarted.current = true;
     const revealed = revealDealer(s);
     await updateState(revealed);
-    setTimeout(async () => {
-      const resolved = resolveDealer(revealed);
-      await updateState(resolved);
-    }, 1800);
+    setTimeout(async () => { await updateState(resolveDealer(revealed)); }, 1800);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [game.id, supabase]);
 
@@ -134,7 +166,6 @@ export function BlackjackGame({ game, lobby, players, currentUser, onGameEnd }: 
     return () => { supabase.removeChannel(channel); };
   }, [game.id, supabase]);
 
-  // The boss drives the dealer once everyone has acted.
   useEffect(() => {
     if (!state || !amBoss) return;
     if (state.phase === "playing" && state.hands.length > 0 && allPlayersDone(state) && !dealerStarted.current) {
@@ -149,9 +180,11 @@ export function BlackjackGame({ game, lobby, players, currentUser, onGameEnd }: 
   const myStack = state.stacks[myId] ?? 0;
   const myBet = state.bets[myId] ?? 0;
   const amSeated = myId !== dealerId && state.playerIds.includes(myId);
-  const myHand = state.hands.find((ph) => ph.playerId === myId);
-  const myDone = myHand ? myHand.standing || myHand.busted : true;
-  const stillPlaying = state.hands.filter((ph) => !ph.standing && !ph.busted);
+  const myHands = state.hands.filter((h) => h.playerId === myId);
+  const myActiveIdx = activeHandIndex(state, myId);
+  const myActive = myActiveIdx >= 0 ? state.hands[myActiveIdx] : null;
+  const myDone = amSeated && myHands.length > 0 && myActiveIdx < 0;
+  const stillPlaying = state.hands.filter((h) => !h.standing && !h.busted);
 
   const dealerRevealed = state.dealerRevealed;
   const dealerValue = handValue(state.dealerHand);
@@ -160,7 +193,6 @@ export function BlackjackGame({ game, lobby, players, currentUser, onGameEnd }: 
   const dealerBusted = dealerValue > 21;
   const broke = tableBroke(state);
 
-  // ----- actions -----
   const placeBet = async () => {
     const amt = Math.floor(Number(betInput));
     if (!Number.isFinite(amt) || amt <= 0) { toast({ title: "Enter a bet", variant: "destructive" }); return; }
@@ -177,29 +209,15 @@ export function BlackjackGame({ game, lobby, players, currentUser, onGameEnd }: 
     if (allPlayersDone(dealt)) runDealerSequence(dealt);
   };
 
-  const handleHit = async () => {
-    if (!myHand || actionLoading || state.phase !== "playing" || myDone) return;
+  const doMove = async (fn: (s: BlackjackState, pid: string) => BlackjackState) => {
+    if (actionLoading || state.phase !== "playing" || myActiveIdx < 0) return;
     setActionLoading(true);
-    await updateState(hitPlayer(state, myId));
-    setActionLoading(false);
-  };
-  const handleStand = async () => {
-    if (!myHand || actionLoading || state.phase !== "playing" || myDone) return;
-    setActionLoading(true);
-    await updateState(standPlayer(state, myId));
+    await updateState(fn(state, myId));
     setActionLoading(false);
   };
 
-  const startNextHand = async () => {
-    dealerStarted.current = false;
-    await updateState(nextHand(state));
-  };
-  const endGame = async () => {
-    setSaving(true);
-    await supabase.rpc("finish_table_game", { p_game_id: game.id });
-    setSaving(false);
-    onGameEnd();
-  };
+  const startNextHand = async () => { dealerStarted.current = false; await updateState(nextHand(state)); };
+  const endGame = async () => { setSaving(true); await supabase.rpc("finish_table_game", { p_game_id: game.id }); setSaving(false); onGameEnd(); };
 
   const requestRebuy = async () => {
     if (state.rebuyReq.includes(myId)) return;
@@ -217,10 +235,11 @@ export function BlackjackGame({ game, lobby, players, currentUser, onGameEnd }: 
   };
 
   const seatProfiles = state.playerIds.map((id) => players.find((p) => p.id === id)).filter(Boolean) as Profile[];
+  const dbl = state.phase === "playing" && canDouble(state, myId);
+  const spl = state.phase === "playing" && canSplit(state, myId);
 
   return (
     <div className="space-y-4 animate-fade-in">
-      {/* ===== The table ===== */}
       <div className="bj-table px-3 sm:px-6 pt-6 pb-16 sm:pb-20 mt-3">
         {/* Dealer */}
         <div className="flex flex-col items-center mb-5">
@@ -252,17 +271,14 @@ export function BlackjackGame({ game, lobby, players, currentUser, onGameEnd }: 
               {dealerRevealed && dealerBusted && <span className="text-[10px] font-bold text-red-400 bg-red-400/15 border border-red-500/40 px-2 py-0.5 rounded-full">BUST</span>}
             </div>
           )}
-          {dealerProfile && (
-            <span className="mt-1 text-[11px] font-mono text-gold-300/90">Bank {formatChips(state.stacks[dealerProfile.id] ?? 0)}</span>
-          )}
+          {dealerProfile && <span className="mt-1 text-[11px] font-mono text-gold-300/90">Bank {formatChips(state.stacks[dealerProfile.id] ?? 0)}</span>}
         </div>
 
-        {/* Center branding */}
+        {/* Center branding — matches the main menu */}
         <div className="flex flex-col items-center text-center mb-6 select-none">
-          <div className="w-10 h-10 rotate-45 bg-black/30 border border-gold-500/50 flex items-center justify-center mb-3">
-            <Spade className="w-5 h-5 text-gold-400 -rotate-45" />
-          </div>
-          <p className="font-display text-xl sm:text-2xl font-black uppercase gold-gradient leading-none">Gabe&apos;s Chips</p>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.png" alt="Gabe's Chips" className="w-14 h-14 object-contain mb-1" />
+          <p className="font-display text-xl sm:text-2xl font-black uppercase logo-gold leading-none">Gabe&apos;s Chips</p>
           <p className="font-serif text-[11px] sm:text-xs tracking-[0.3em] uppercase text-gold-400/70 mt-2">Blackjack pays 3 to 2</p>
           <p className="text-[10px] tracking-[0.2em] uppercase text-white/40 mt-1">Hand {state.round} · Buy-in {formatChips(state.stake)}</p>
         </div>
@@ -270,53 +286,29 @@ export function BlackjackGame({ game, lobby, players, currentUser, onGameEnd }: 
         {/* Seats */}
         <div className="flex justify-center items-start gap-2 sm:gap-3 flex-wrap">
           {seatProfiles.map((profile, i) => {
-            const ph = state.hands.find((h) => h.playerId === profile.id);
+            const phs = state.hands.filter((h) => h.playerId === profile.id);
             const isMe = profile.id === myId;
             const stack = state.stacks[profile.id] ?? 0;
             const bet = state.bets[profile.id] ?? 0;
-            const outcome = state.results?.[profile.id] ?? null;
-            const value = ph ? handValue(ph.hand) : 0;
-            const bj = ph ? isBlackjack(ph.hand) : false;
+            const cardSize: "sm" | "md" = phs.length > 1 ? "sm" : "md";
             return (
               <div key={profile.id} style={{ transform: `translateY(${arcDrop(i, seatProfiles.length)}px)` }}
-                className={`flex flex-col items-center gap-1.5 p-2 rounded-xl ${isMe ? "bg-black/35 ring-1 ring-gold-500/60" : "bg-black/20"} ${stack <= 0 && bet <= 0 && !ph ? "opacity-50" : ""}`}>
-                {ph ? (
-                  <>
-                    <div className="flex justify-center">
-                      {ph.hand.map((card, j) => (
-                        <div key={j} className={j > 0 ? "-ml-8" : ""}>
-                          <PlayingCard rank={card.display} suit={card.suit} size="md" highlight={value === 21} />
-                        </div>
-                      ))}
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className={`text-xl font-bold leading-none ${value > 21 ? "text-red-400" : value === 21 ? "text-gold-400" : "text-white"}`}>{value}</span>
-                      {outcome ? (
-                        <span className={`text-[10px] font-bold border px-1.5 py-0.5 rounded-full ${OUTCOME_CLASS[outcome]}`}>{OUTCOME_LABEL[outcome]}</span>
-                      ) : (
-                        <>
-                          {bj && <span className="text-[10px] font-bold text-gold-400 bg-gold-400/15 px-1.5 py-0.5 rounded-full">BJ!</span>}
-                          {ph.busted && <span className="text-[10px] font-bold text-red-400 bg-red-400/15 px-1.5 py-0.5 rounded-full">BUST</span>}
-                          {ph.standing && !ph.busted && !bj && <span className="text-[10px] font-bold text-blue-400 bg-blue-400/15 px-1.5 py-0.5 rounded-full">STAND</span>}
-                        </>
-                      )}
-                    </div>
-                  </>
+                className={`flex flex-col items-center gap-1.5 p-2 rounded-xl ${isMe ? "bg-black/35 ring-1 ring-gold-500/60" : "bg-black/20"} ${stack <= 0 && bet <= 0 && phs.length === 0 ? "opacity-50" : ""}`}>
+                {phs.length > 0 ? (
+                  <div className="flex items-start justify-center gap-1">
+                    {phs.map((ph) => (
+                      <HandView key={state.hands.indexOf(ph)} ph={ph} size={cardSize}
+                        active={state.phase === "playing" && state.hands.indexOf(ph) === activeHandIndex(state, profile.id)} />
+                    ))}
+                  </div>
                 ) : (
                   <div className="h-[7rem] flex items-center justify-center">
-                    {bet > 0
-                      ? <span className="text-gold-400 font-mono text-sm">bet {formatChips(bet)}</span>
-                      : <span className="text-white/30 text-xs">{stack > 0 ? "no bet" : "out"}</span>}
+                    {bet > 0 ? <span className="text-gold-400 font-mono text-sm">bet {formatChips(bet)}</span> : <span className="text-white/30 text-xs">{stack > 0 ? "no bet" : "out"}</span>}
                   </div>
                 )}
                 <PlayerAvatar username={profile.username} userId={profile.id} size="sm" isHost={profile.id === lobby.host_id} />
                 <span className={`text-xs leading-none truncate max-w-[110px] ${isMe ? "text-gold-400 font-semibold" : "text-white/70"}`}>{isMe ? "You" : profile.username}</span>
                 <span className="text-[11px] font-mono text-gold-300/90">{formatChips(stack)}</span>
-                {outcome && (
-                  <span className="text-[10px] text-white/50 leading-none">
-                    {outcome === "lose" ? `−${formatChips(bet)}` : `+${formatChips(payoutFor(outcome, bet) - bet)}`}
-                  </span>
-                )}
               </div>
             );
           })}
@@ -325,11 +317,11 @@ export function BlackjackGame({ game, lobby, players, currentUser, onGameEnd }: 
 
       {/* ===== Controls ===== */}
 
-      {/* Betting phase — seated player picks a wager */}
+      {/* Betting — seated player */}
       {state.phase === "betting" && amSeated && (
         <div className="casino-card p-4 space-y-3">
           <div className="flex items-center justify-between">
-            <span className="text-sm font-semibold">Your bet</span>
+            <span className="text-sm font-semibold">Your bet this hand</span>
             <span className="text-sm text-muted-foreground">Stack <span className="font-mono text-gold-400">{formatChips(myStack)}</span></span>
           </div>
           {myBet > 0 ? (
@@ -356,7 +348,7 @@ export function BlackjackGame({ game, lobby, players, currentUser, onGameEnd }: 
         </div>
       )}
 
-      {/* Betting phase — boss deals once bets are in */}
+      {/* Betting — boss deals */}
       {state.phase === "betting" && amBoss && (
         <div className="casino-card p-4 space-y-3">
           <p className="text-sm font-medium text-gold-400">{isDealerMe ? "👑 You're the dealer" : "🎩 You run the table"}</p>
@@ -368,37 +360,39 @@ export function BlackjackGame({ game, lobby, players, currentUser, onGameEnd }: 
               </div>
             ))}
           </div>
-          {broke ? (
-            <p className="text-sm text-red-400/90 text-center">All players are out of chips.</p>
-          ) : (
-            <Button variant="gold" size="lg" className="w-full" onClick={deal} disabled={!anyBet(state)}>Deal Hand</Button>
-          )}
+          {broke ? <p className="text-sm text-red-400/90 text-center">All players are out of chips.</p>
+            : <Button variant="gold" size="lg" className="w-full" onClick={deal} disabled={!anyBet(state)}>Deal Hand</Button>}
           <Button variant="outline" size="sm" className="w-full border-destructive/40 text-destructive hover:bg-destructive/10" onClick={endGame} disabled={saving}>
             {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <DoorClosed className="w-4 h-4 mr-2" />} End Game &amp; Cash Out
           </Button>
         </div>
       )}
 
-      {/* Playing — my hit/stand */}
-      {state.phase === "playing" && myHand && (
+      {/* Playing — my actions on the active hand */}
+      {state.phase === "playing" && myHands.length > 0 && (
         <div className="casino-card p-4">
           {myDone ? (
             <div className="text-center space-y-1">
-              <p className="text-muted-foreground text-sm font-medium">
-                {myHand.busted ? "You busted 💥" : isBlackjack(myHand.hand) ? "Blackjack! Waiting for the dealer…" : `You're standing on ${handValue(myHand.hand)}`}
-              </p>
+              <p className="text-muted-foreground text-sm font-medium">You&apos;re all set — waiting for the table.</p>
               {stillPlaying.length > 0 && (
                 <div className="flex items-center justify-center gap-2 text-muted-foreground text-sm">
-                  <Loader2 className="w-4 h-4 animate-spin" /> Waiting for {stillPlaying.length} player{stillPlaying.length > 1 ? "s" : ""}…
+                  <Loader2 className="w-4 h-4 animate-spin" /> {stillPlaying.length} hand{stillPlaying.length > 1 ? "s" : ""} still in play…
                 </div>
               )}
             </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-3">
-              <Button variant="gold" size="lg" onClick={handleHit} disabled={actionLoading || handValue(myHand.hand) >= 21} className="h-16 flex-col gap-1"><Plus className="w-5 h-5" /><span>Hit</span></Button>
-              <Button variant="casino" size="lg" onClick={handleStand} disabled={actionLoading} className="h-16 flex-col gap-1"><Hand className="w-5 h-5" /><span>Stand</span></Button>
-            </div>
-          )}
+          ) : myActive ? (
+            <>
+              {myHands.length > 1 && (
+                <p className="text-center text-xs text-gold-400 mb-2">Playing hand {myHands.indexOf(myActive) + 1} of {myHands.length} · bet {formatChips(myActive.bet)}</p>
+              )}
+              <div className={`grid ${dbl && spl ? "grid-cols-2 sm:grid-cols-4" : dbl || spl ? "grid-cols-3" : "grid-cols-2"} gap-2`}>
+                <Button variant="gold" size="lg" onClick={() => doMove(hitPlayer)} disabled={actionLoading || handValue(myActive.hand) >= 21} className="h-14 flex-col gap-0.5"><Plus className="w-5 h-5" /><span className="text-xs">Hit</span></Button>
+                <Button variant="casino" size="lg" onClick={() => doMove(standPlayer)} disabled={actionLoading} className="h-14 flex-col gap-0.5"><Hand className="w-5 h-5" /><span className="text-xs">Stand</span></Button>
+                {dbl && <Button variant="casino" size="lg" onClick={() => doMove(doubleDown)} disabled={actionLoading} className="h-14 flex-col gap-0.5 border-gold-500/50"><Copy className="w-5 h-5" /><span className="text-xs">Double</span></Button>}
+                {spl && <Button variant="casino" size="lg" onClick={() => doMove(splitHand)} disabled={actionLoading} className="h-14 flex-col gap-0.5 border-gold-500/50"><SplitSquareHorizontal className="w-5 h-5" /><span className="text-xs">Split</span></Button>}
+              </div>
+            </>
+          ) : null}
         </div>
       )}
 
@@ -407,7 +401,7 @@ export function BlackjackGame({ game, lobby, players, currentUser, onGameEnd }: 
         <div className="casino-card p-4 text-center">
           <p className="text-sm font-medium text-gold-400">👑 You&apos;re the dealer</p>
           <p className="text-xs text-muted-foreground mt-1">Your hand plays itself (hit to 17) once everyone acts.</p>
-          {stillPlaying.length > 0 && <div className="flex items-center justify-center gap-2 text-muted-foreground text-sm mt-2"><Loader2 className="w-4 h-4 animate-spin" /> Waiting for {stillPlaying.length}…</div>}
+          {stillPlaying.length > 0 && <div className="flex items-center justify-center gap-2 text-muted-foreground text-sm mt-2"><Loader2 className="w-4 h-4 animate-spin" /> {stillPlaying.length} in play…</div>}
         </div>
       )}
 
@@ -415,22 +409,14 @@ export function BlackjackGame({ game, lobby, players, currentUser, onGameEnd }: 
         <div className="casino-card p-4 text-center"><Loader2 className="w-5 h-5 animate-spin text-gold-400 mx-auto mb-1" /><p className="text-sm text-muted-foreground">Dealer reveals the hole card…</p></div>
       )}
 
-      {/* Result — next hand / end */}
+      {/* Result */}
       {state.phase === "result" && (
         <div className="casino-card p-4 space-y-3 text-center">
-          {amSeated && state.results?.[myId] && (
-            <p className="font-display text-2xl font-black gold-gradient uppercase">
-              {state.results[myId] === "blackjack" ? "Blackjack!" : state.results[myId] === "win" ? "You win!" : state.results[myId] === "push" ? "Push" : "Dealer wins"}
-            </p>
-          )}
           <p className="text-sm text-muted-foreground">Your stack: <span className="font-mono text-gold-400">{formatChips(myStack)}</span></p>
           {amBoss ? (
             <div className="space-y-2">
-              {broke ? (
-                <p className="text-sm text-red-400/90">All players are out of chips — cash out to end.</p>
-              ) : (
-                <Button variant="gold" size="lg" className="w-full" onClick={startNextHand}>Next Hand</Button>
-              )}
+              {broke ? <p className="text-sm text-red-400/90">All players are out of chips — cash out to end.</p>
+                : <Button variant="gold" size="lg" className="w-full" onClick={startNextHand}>Next Hand</Button>}
               <Button variant="outline" size="sm" className="w-full border-destructive/40 text-destructive hover:bg-destructive/10" onClick={endGame} disabled={saving}>
                 {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <DoorClosed className="w-4 h-4 mr-2" />} End Game &amp; Cash Out
               </Button>

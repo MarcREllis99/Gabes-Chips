@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Toaster } from "@/components/ui/toaster";
 import { useToast } from "@/components/ui/use-toast";
-import { Loader2, Plus, Hand, Spade, Zap, Coins, DoorClosed } from "lucide-react";
+import { Loader2, Plus, Hand, Zap, Coins, DoorClosed } from "lucide-react";
 import { formatChips } from "@/lib/utils";
 import {
   type FreeBetState,
@@ -250,10 +250,11 @@ export function FreeBetGame({ game, lobby, players, currentUser, onGameEnd }: Pr
           {dealerProfile && <span className="mt-1 text-[11px] font-mono text-gold-300/90">Bank {formatChips(state.stacks[dealerProfile.id] ?? 0)}</span>}
         </div>
 
-        {/* Center branding */}
+        {/* Center branding — matches the main menu */}
         <div className="flex flex-col items-center text-center mb-6 select-none">
-          <div className="w-10 h-10 rotate-45 bg-black/30 border border-gold-500/50 flex items-center justify-center mb-3"><Spade className="w-5 h-5 text-gold-400 -rotate-45" /></div>
-          <p className="font-display text-xl sm:text-2xl font-black uppercase gold-gradient leading-none">Gabe&apos;s Chips</p>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.png" alt="Gabe's Chips" className="w-14 h-14 object-contain mb-1" />
+          <p className="font-display text-xl sm:text-2xl font-black uppercase logo-gold leading-none">Gabe&apos;s Chips</p>
           <p className="font-serif text-[11px] sm:text-xs tracking-[0.3em] uppercase text-gold-400/70 mt-2">Free Bet · Double on 9·10·11</p>
           <p className="text-[10px] tracking-[0.2em] uppercase text-white/40 mt-1">Hand {state.round} · Buy-in {formatChips(state.stake)}</p>
         </div>
