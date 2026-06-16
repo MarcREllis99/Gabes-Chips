@@ -252,7 +252,13 @@ export default function HomePage() {
             onClick={() => setShowTracker(true)}
             className="casino-card w-full p-5 flex items-center gap-4 text-left hover:border-gold-500/50 transition-all duration-200 group"
           >
-            <div className="text-3xl shrink-0">🪙</div>
+            {/* Poker chip */}
+            <svg viewBox="0 0 40 40" className="w-9 h-9 shrink-0" aria-hidden="true">
+              <circle cx="20" cy="20" r="19" fill="#d8b24a" />
+              <circle cx="20" cy="20" r="15.5" fill="none" stroke="#0c0c0c" strokeWidth="5" strokeDasharray="5.2 6.95" />
+              <circle cx="20" cy="20" r="11" fill="#141414" stroke="#d8b24a" strokeWidth="1.5" />
+              <text x="20" y="24.5" textAnchor="middle" fontSize="12" fontWeight="bold" fill="#e8c66a">♠</text>
+            </svg>
             <div className="min-w-0 flex-1">
               <div className="font-display text-lg font-bold uppercase group-hover:text-gold-400 transition-colors">
                 Track Chips for Your Own Game
