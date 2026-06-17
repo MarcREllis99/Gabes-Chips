@@ -25,6 +25,7 @@ export interface WildsState {
   drewThisTurn: boolean; // current player has drawn (may play it or pass)
   winnerId: string | null;
   lastAction: string | null;
+  oneCard?: { pid: string } | null; // a player just hit 1 card & hasn't called "One More Wild"
 }
 
 export const COLORS: WColor[] = ["red", "yellow", "green", "blue"];
@@ -96,6 +97,7 @@ export function initWildsState(playerIds: string[], stake: number): WildsState {
     drewThisTurn: false,
     winnerId: null,
     lastAction: null,
+    oneCard: null,
   };
 }
 
@@ -150,9 +152,12 @@ export function drawCard(state: WildsState): WildsState {
   if (state.phase !== "playing" || state.drewThisTurn) return state;
   const pid = state.playerIds[state.turn];
   const next = drawTo(state, pid, 1);
+  // a player who was on their last card and chose to draw is no longer catchable
+  const oneCard = next.oneCard && (next.hands[next.oneCard.pid]?.length ?? 0) !== 1 ? null : (next.oneCard ?? null);
   return {
     ...next,
     drewThisTurn: true,
+    oneCard,
     lastAction: `${shortName(pid, state)} drew a card`,
   };
 }
@@ -242,6 +247,11 @@ export function playCard(state: WildsState, cardId: string, chosenColor?: WColor
       next.lastAction = label;
     }
   }
+
+  // Mark the player catchable when they drop to a single card; clear a stale
+  // flag if a previously-marked player no longer has exactly one card.
+  if (newHand.length === 1) next.oneCard = { pid };
+  if (next.oneCard && (next.hands[next.oneCard.pid]?.length ?? 0) !== 1) next.oneCard = null;
 
   return next;
 }

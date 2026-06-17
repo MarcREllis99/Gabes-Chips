@@ -144,6 +144,7 @@ export function GabesWildsGame({
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [iCalled, setICalled] = useState(false);
+  const [catching, setCatching] = useState(false);
   const settledRef = useRef(false);
   const channelRef = useRef<ReturnType<ReturnType<typeof createClient>["channel"]> | null>(null);
 
@@ -188,11 +189,20 @@ export function GabesWildsGame({
           if (Array.isArray(next?.drawPile)) setState(next);
         }
       )
-      // "One More Wild" call — a live notification that doesn't touch game state
+      // "One More Wild" call — a live notification (state is cleared via RPC)
       .on("broadcast", { event: "wilds_call" }, ({ payload }) => {
         toast({
           title: "📣 One More Wild!",
-          description: `${(payload as { name?: string })?.name ?? "A player"} has just one card left!`,
+          description: `${(payload as { name?: string })?.name ?? "A player"} called it with one card left!`,
+        });
+      })
+      // someone got caught not calling → drew 4
+      .on("broadcast", { event: "wilds_caught" }, ({ payload }) => {
+        const p = payload as { name?: string; by?: string };
+        toast({
+          title: "🚨 Caught!",
+          description: `${p.name ?? "A player"} forgot to call — drew 4 (caught by ${p.by ?? "someone"})!`,
+          variant: "destructive",
         });
       })
       .subscribe();
@@ -200,19 +210,35 @@ export function GabesWildsGame({
     return () => { supabase.removeChannel(channel); channelRef.current = null; };
   }, [game.id, supabase, toast]);
 
-  // Reset the call prompt whenever I'm no longer down to one card
+  // Reset prompts whenever the catchable player is no longer me / changes
+  const oneCardPid = state?.oneCard?.pid ?? null;
   useEffect(() => {
-    if ((state?.hands[myId]?.length ?? 0) !== 1) setICalled(false);
-  }, [state, myId]);
+    if (oneCardPid !== myId) setICalled(false);
+    setCatching(false);
+  }, [oneCardPid, myId]);
 
-  const callOneMore = () => {
-    channelRef.current?.send({
-      type: "broadcast",
-      event: "wilds_call",
-      payload: { name: nameOf(myId) },
-    });
-    setICalled(true);
-    toast({ title: "📣 You called One More Wild!", description: "Everyone's been notified." });
+  const refresh = useCallback(async () => {
+    const { data } = await supabase.from("games").select("state").eq("id", game.id).single();
+    if (data?.state) setState(data.state as unknown as WildsState);
+  }, [supabase, game.id]);
+
+  const callOneMore = async () => {
+    setICalled(true); // optimistic
+    channelRef.current?.send({ type: "broadcast", event: "wilds_call", payload: { name: nameOf(myId) } });
+    await supabase.rpc("wilds_call", { p_game_id: game.id });
+    await refresh();
+    toast({ title: "📣 You called One More Wild!", description: "You're safe." });
+  };
+
+  const catchPlayer = async () => {
+    const target = state?.oneCard?.pid;
+    if (!target || target === myId || catching) return;
+    setCatching(true);
+    const { error } = await supabase.rpc("wilds_catch", { p_game_id: game.id, p_target: target });
+    if (error) { toast({ title: "Couldn't catch", description: error.message, variant: "destructive" }); setCatching(false); return; }
+    channelRef.current?.send({ type: "broadcast", event: "wilds_caught", payload: { name: nameOf(target), by: nameOf(myId) } });
+    await refresh();
+    toast({ title: "🚨 Gotcha!", description: `${nameOf(target)} didn't call — drew 4.` });
   };
 
   // Host pays the winner once the hand ends
@@ -282,8 +308,8 @@ export function GabesWildsGame({
         </p>
       </div>
 
-      {/* "One More Wild" call — appears whenever you're down to your last card */}
-      {myIndex >= 0 && state.phase === "playing" && myHand.length === 1 && !iCalled && (
+      {/* "One More Wild" — you have one card and haven't called yet (race the catchers!) */}
+      {state.phase === "playing" && state.oneCard?.pid === myId && !iCalled && (
         <Button
           variant="gold"
           size="lg"
@@ -291,7 +317,19 @@ export function GabesWildsGame({
           onClick={callOneMore}
         >
           <Megaphone className="w-5 h-5 mr-2" />
-          One More Wild
+          One More Wild — call it before you&apos;re caught!
+        </Button>
+      )}
+
+      {/* Catch — everyone else can call out a player who forgot to say it */}
+      {state.phase === "playing" && state.oneCard && state.oneCard.pid !== myId && (state.hands[state.oneCard.pid]?.length ?? 0) === 1 && (
+        <Button
+          size="lg"
+          className="w-full bg-red-600 hover:bg-red-500 text-white animate-pulse-gold"
+          disabled={catching}
+          onClick={catchPlayer}
+        >
+          🚨 Catch {nameOf(state.oneCard.pid)} — they didn&apos;t call! (+4)
         </Button>
       )}
 
