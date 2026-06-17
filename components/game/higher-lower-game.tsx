@@ -14,7 +14,6 @@ import {
   initHigherLowerState,
   resolveRound,
   calculatePayout,
-  HOUSE_RAKE,
 } from "@/lib/game-logic/higher-lower";
 import type { Database } from "@/lib/supabase";
 
@@ -164,8 +163,6 @@ export function HigherLowerGame({
           <span>Round {state.currentRound + 1}/{state.totalRounds}</span>
           <span>·</span>
           <span>Pot: <strong className="text-gold-400">{formatChips(state.pot)}</strong></span>
-          <span>·</span>
-          <span>Rake: {Math.round(HOUSE_RAKE * 100)}%</span>
         </div>
       </div>
 

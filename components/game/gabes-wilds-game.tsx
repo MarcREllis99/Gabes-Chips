@@ -380,7 +380,7 @@ export function GabesWildsGame({
             {winner.id === myId ? "You Win!" : `${winner.username} Wins!`}
           </h2>
           <p className="text-gold-400 font-semibold mb-4">
-            Takes the {formatChips(Math.floor(state.pot * 0.95))} chip pot
+            Takes the {formatChips(state.pot)} chip pot
           </p>
           {saving && <Loader2 className="w-4 h-4 animate-spin text-gold-400 mx-auto mb-3" />}
           <Button variant="gold" size="lg" onClick={onGameEnd} disabled={saving}>

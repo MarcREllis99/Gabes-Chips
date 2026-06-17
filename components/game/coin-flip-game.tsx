@@ -206,7 +206,6 @@ export function CoinFlipGame({
         <p className="text-muted-foreground text-sm">
           Stake: <span className="text-gold-400 font-semibold">{formatChips(state.stake)}</span> each
           {" · "}Pot: <span className="text-gold-400 font-semibold">{formatChips(state.pot)} chips</span>
-          {" · "}Rake: {Math.round(HOUSE_RAKE * 100)}%
         </p>
       </div>
 

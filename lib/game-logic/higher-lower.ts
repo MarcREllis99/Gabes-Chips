@@ -33,7 +33,7 @@ export interface HigherLowerState {
   pot: number;
 }
 
-export const HOUSE_RAKE = 0.05;
+export const HOUSE_RAKE = 0; // no house rake — winners take the full pot
 const SUITS: Suit[] = ["♠", "♥", "♦", "♣"];
 const RANK_DISPLAY: Record<CardRank, string> = {
   2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8",

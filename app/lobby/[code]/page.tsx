@@ -672,7 +672,7 @@ export default function LobbyPage() {
                       ? "Real betting rounds — play hands until one player has every chip"
                       : lobby.game_type === "three_card"
                         ? "Ante each round vs the house — last player with chips standing wins"
-                        : "Winner takes the pot minus the 5% rake"}
+                        : "Winner takes the whole pot"}
                 </p>
               </div>
             </div>

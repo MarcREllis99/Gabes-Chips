@@ -50,7 +50,7 @@ const SUITS: Suit[] = ["♠", "♥", "♦", "♣"];
 const RANK_DISPLAY: Record<number, string> = { 9: "9", 10: "10", 11: "J", 12: "Q", 13: "K", 14: "A" };
 
 export const POINTS_TO_WIN = 10;
-export const HOUSE_RAKE = 0.05;
+export const HOUSE_RAKE = 0; // no house rake — winners take the full pot
 
 export function team(seat: number): 0 | 1 {
   return (seat % 2) as 0 | 1;

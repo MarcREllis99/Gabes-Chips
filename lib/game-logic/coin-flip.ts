@@ -12,7 +12,7 @@ export interface CoinFlipState {
   winnerId: string | null;
 }
 
-export const HOUSE_RAKE = 0.05;
+export const HOUSE_RAKE = 0; // no house rake — winners take the full pot
 
 export function initCoinFlipState(
   hostId: string,
