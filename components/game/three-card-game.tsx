@@ -5,7 +5,7 @@ import { createClient } from "@/lib/supabase";
 import { PlayerAvatar } from "@/components/player-avatar";
 import { PlayingCard } from "./playing-card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Chip, ChipStack, denomsForBuyIn } from "./poker-chips";
 import { Toaster } from "@/components/ui/toaster";
 import { useToast } from "@/components/ui/use-toast";
 import { Loader2, Trophy, Check, X, Spade, Coins, DoorClosed } from "lucide-react";
@@ -60,7 +60,7 @@ export function ThreeCardGame({ game, lobby, players, currentUser, isHost, onGam
   const [state, setState] = useState<ThreeCardState | null>(null);
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [anteInput, setAnteInput] = useState("");
+  const [anteTray, setAnteTray] = useState<Record<number, number>>({});
   const resolveRef = useRef(false);
 
   const supabase = createClient();
@@ -132,13 +132,16 @@ export function ThreeCardGame({ game, lobby, players, currentUser, isHost, onGam
   const dealerScore = state.dealerRevealed ? handName3(state.dealerHand) : null;
   const undecided = state.players.filter((p) => p.decision === null);
 
+  const denoms = denomsForBuyIn(state.stake);
+  const anteVal = Object.entries(anteTray).reduce((s, [d, c]) => s + Number(d) * c, 0);
+  const addAnteChip = (d: number) => { if (anteVal + d <= myStack) setAnteTray((t) => ({ ...t, [d]: (t[d] ?? 0) + 1 })); };
+  const removeAnteChip = (d: number) => setAnteTray((t) => ({ ...t, [d]: Math.max(0, (t[d] ?? 0) - 1) }));
   const placeAnte = async () => {
-    const amt = Math.floor(Number(anteInput));
-    if (!Number.isFinite(amt) || amt <= 0) { toast({ title: "Enter an ante", variant: "destructive" }); return; }
-    setAnteInput("");
-    await updateState(setAnte(state, myId, amt));
+    if (anteVal <= 0) { toast({ title: "Tap some chips to ante", variant: "destructive" }); return; }
+    setAnteTray({});
+    await updateState(setAnte(state, myId, anteVal));
   };
-  const clearAnte = async () => updateState(setAnte(state, myId, 0));
+  const clearAnte = async () => { setAnteTray({}); await updateState(setAnte(state, myId, 0)); };
 
   const deal = async () => {
     if (!anyAnte(state)) { toast({ title: "No antes placed yet", variant: "destructive" }); return; }
@@ -241,9 +244,10 @@ export function ThreeCardGame({ game, lobby, players, currentUser, isHost, onGam
           {/* Betting — choose ante */}
           {state.phase === "betting" && isSeated && (
             <div className="casino-card p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-semibold">Your ante</span>
-                <span className="text-sm text-muted-foreground">Stack <span className="font-mono text-gold-400">{formatChips(myStack)}</span></span>
+              <div className="flex items-center gap-2 text-sm">
+                <span className="font-semibold shrink-0">Your ante</span>
+                <ChipStack amount={myStack} denoms={denoms} size={18} />
+                <span className="font-mono text-gold-400 ml-auto shrink-0">{formatChips(myStack)}</span>
               </div>
               {myAnte > 0 ? (
                 <div className="flex items-center justify-between rounded-lg bg-gold-500/10 border border-gold-500/30 px-3 py-2">
@@ -254,16 +258,33 @@ export function ThreeCardGame({ game, lobby, players, currentUser, isHost, onGam
                 <p className="text-sm text-red-400/90 text-center py-1">You&apos;re out of chips — eliminated.</p>
               ) : (
                 <>
-                  <div className="flex gap-2">
-                    <Input type="number" inputMode="numeric" min={1} max={myStack} placeholder="Amount" value={anteInput} onChange={(e) => setAnteInput(e.target.value)} className="flex-1" />
-                    <Button variant="gold" onClick={placeAnte} disabled={!anteInput}><Coins className="w-4 h-4 mr-1.5" /> Ante</Button>
-                  </div>
+                  <p className="text-[11px] text-muted-foreground">Tap chips to set your ante</p>
                   <div className="flex flex-wrap gap-2">
-                    {[state.stake, Math.round(state.stake / 2), Math.round(state.stake / 4)].filter((v, idx, a) => v > 0 && a.indexOf(v) === idx).map((v) => (
-                      <Button key={v} variant="outline" size="sm" onClick={() => setAnteInput(String(Math.min(v, myStack)))}>{formatChips(v)}</Button>
+                    {denoms.map((d) => (
+                      <button key={d} type="button" disabled={anteVal + d > myStack} onClick={() => addAnteChip(d)}
+                        className={`rounded-full ${anteVal + d > myStack ? "opacity-30" : "hover:scale-105 active:scale-95 transition-transform"}`}>
+                        <Chip value={d} size={40} />
+                      </button>
                     ))}
-                    <Button variant="outline" size="sm" onClick={() => setAnteInput(String(myStack))}>All in</Button>
                   </div>
+                  {anteVal > 0 && (
+                    <div className="rounded-xl bg-black/30 border border-gold-500/20 p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[11px] text-muted-foreground">Ante — tap to remove</span>
+                        <span className="font-mono font-semibold text-gold-400">{formatChips(anteVal)}</span>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {Object.entries(anteTray).filter(([, c]) => c > 0).map(([d, c]) => (
+                          <button key={d} type="button" onClick={() => removeAnteChip(Number(d))} className="flex items-center gap-1">
+                            <Chip value={Number(d)} size={30} /><span className="text-[10px] text-muted-foreground">×{c}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <Button variant="gold" className="w-full" onClick={placeAnte} disabled={anteVal <= 0}>
+                    <Coins className="w-4 h-4 mr-1.5" /> Ante {formatChips(anteVal)}
+                  </Button>
                 </>
               )}
             </div>

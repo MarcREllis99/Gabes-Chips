@@ -11,7 +11,10 @@
       "Bash(ls node_modules/.bin/tsc)",
       "Bash(ls package.json tsconfig.json)",
       "Bash(node_modules/.bin/tsc --noEmit -p tsconfig.json)",
-      "Bash(cd \"/Users/MarcEllis/Desktop/Gabe's Chips\" && node_modules/.bin/tsc --noEmit -p tsconfig.json 2>&1 | grep \"chip-tracker\" > /tmp/ct_errs.txt; grep -vE \"type 'never'|type 'undefined'|type 'never\\\\[\\\\]'|downlevelIteration\" /tmp/ct_errs.txt; echo \"---total chip-tracker errors:\"; wc -l < /tmp/ct_errs.txt)"
+      "Bash(cd \"/Users/MarcEllis/Desktop/Gabe's Chips\" && node_modules/.bin/tsc --noEmit -p tsconfig.json 2>&1 | grep \"chip-tracker\" > /tmp/ct_errs.txt; grep -vE \"type 'never'|type 'undefined'|type 'never\\\\[\\\\]'|downlevelIteration\" /tmp/ct_errs.txt; echo \"---total chip-tracker errors:\"; wc -l < /tmp/ct_errs.txt)",
+      "Bash(grep -nE \"<Input|anteInput|raiseTo|setAnteInput|setRaiseTo\" components/game/three-card-game.tsx components/game/texas-holdem-game.tsx)",
+      "Bash(rm -f _staleck.txt)",
+      "Bash(rm -f /tmp/tc.txt /tmp/full.txt /tmp/ct_errs.txt 2>/dev/null; df -h /tmp 2>/dev/null | tail -1 || true)"
     ]
   }
 }

@@ -5,7 +5,7 @@ import { createClient } from "@/lib/supabase";
 import { PlayerAvatar } from "@/components/player-avatar";
 import { PlayingCard } from "./playing-card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Chip, ChipStack, denomsForBuyIn } from "./poker-chips";
 import { Toaster } from "@/components/ui/toaster";
 import { useToast } from "@/components/ui/use-toast";
 import { Loader2, Trophy, Spade, DoorClosed } from "lucide-react";
@@ -49,7 +49,7 @@ export function TexasHoldemGame({ game, lobby, players, currentUser, isHost, onG
   const [state, setState] = useState<HoldemState | null>(null);
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [raiseTo, setRaiseTo] = useState("");
+  const [tray, setTray] = useState<Record<number, number>>({}); // chips tapped for this bet
 
   const supabase = createClient();
   const { toast } = useToast();
@@ -97,15 +97,15 @@ export function TexasHoldemGame({ game, lobby, players, currentUser, isHost, onG
   const myTurn = !!state && state.toAct === myId;
   const info = state && myTurn ? actionInfo(state, myId) : null;
 
-  // default the raise box to the min-raise whenever it becomes my turn
+  // clear any tapped chips whenever the action moves to a new spot
   const turnKey = state ? `${state.round}-${state.phase}-${state.toAct}` : "";
   const lastTurnKey = useRef("");
   useEffect(() => {
-    if (myTurn && info && turnKey !== lastTurnKey.current) {
+    if (turnKey !== lastTurnKey.current) {
       lastTurnKey.current = turnKey;
-      setRaiseTo(String(info.minRaiseTo));
+      setTray({});
     }
-  }, [myTurn, info, turnKey]);
+  }, [turnKey]);
 
   if (!state || !Array.isArray(state.players) || !state.stacks) {
     return <div className="flex items-center justify-center h-64"><Loader2 className="w-8 h-8 animate-spin text-gold-400" /></div>;
@@ -117,16 +117,33 @@ export function TexasHoldemGame({ game, lobby, players, currentUser, isHost, onG
   const isGameover = state.phase === "gameover";
   const profileFor = (id: string) => players.find((p) => p.id === id);
 
+  const denoms = denomsForBuyIn(state.stake);
+  const meP = state.players.find((p) => p.playerId === myId);
+  const putIn = Object.entries(tray).reduce((s, [d, c]) => s + Number(d) * c, 0); // chips tapped this action
+
   const doAct = async (action: "fold" | "check" | "call" | "raise", amount = 0) => {
     if (!myTurn || busy) return;
     setBusy(true);
     await updateState(act(state, myId, action, amount));
+    setTray({});
     setBusy(false);
   };
-  const doRaise = async () => {
-    const amt = Math.floor(Number(raiseTo));
-    if (!Number.isFinite(amt)) return;
-    await doAct("raise", amt);
+  const addChip = (d: number) => { if (info && putIn + d <= info.stack) setTray((t) => ({ ...t, [d]: (t[d] ?? 0) + 1 })); };
+  const removeChip = (d: number) => setTray((t) => ({ ...t, [d]: Math.max(0, (t[d] ?? 0) - 1) }));
+  // Commit the tapped chips as a bet (no current bet) or raise (to committed+putIn).
+  const doBetRaise = async () => {
+    if (!info || !meP || putIn <= 0) return;
+    const total = meP.committedRound + putIn;
+    if (total < info.minRaiseTo && total !== info.maxTo) {
+      toast({ title: `Raise to at least ${formatChips(info.minRaiseTo)}`, variant: "destructive" });
+      return;
+    }
+    await doAct("raise", total);
+  };
+  const doAllIn = async () => {
+    if (!info || !meP) return;
+    const total = meP.committedRound + info.stack;
+    await doAct(total > state.currentBet ? "raise" : "call", total);
   };
   const startNext = async () => { if (!isHost) return; await updateState(nextHand(state)); };
   const finish = async () => {
@@ -160,6 +177,7 @@ export function TexasHoldemGame({ game, lobby, players, currentUser, isHost, onG
           <p className="font-display text-lg sm:text-xl font-black uppercase gold-gradient leading-none">Gabe&apos;s Chips</p>
           <p className="text-[10px] tracking-[0.2em] uppercase text-white/40 mt-1">Hand {state.round} · Blinds {formatChips(state.sb)}/{formatChips(state.bb)}</p>
           <p className="mt-2 text-gold-400 font-mono font-bold text-lg">Pot {formatChips(state.pot)}</p>
+          {state.pot > 0 && <div className="mt-1 flex justify-center"><ChipStack amount={state.pot} denoms={denomsForBuyIn(state.stake)} size={20} /></div>}
         </div>
 
         {/* Seats */}
@@ -213,28 +231,56 @@ export function TexasHoldemGame({ game, lobby, players, currentUser, isHost, onG
         <div className="casino-card p-4 space-y-3">
           <div className="flex items-center justify-between text-sm">
             <span className="font-semibold text-gold-400">Your move</span>
-            <span className="text-muted-foreground">Stack <span className="font-mono text-gold-400">{formatChips(info.stack)}</span>{info.toCall > 0 ? <> · To call <span className="font-mono text-amber-300">{formatChips(info.toCall)}</span></> : null}</span>
+            {info.toCall > 0 && <span className="text-muted-foreground">To call <span className="font-mono text-amber-300">{formatChips(info.toCall)}</span></span>}
           </div>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="shrink-0">Your stack</span>
+            <ChipStack amount={info.stack} denoms={denoms} size={20} />
+            <span className="font-mono text-gold-400 ml-auto shrink-0">{formatChips(info.stack)}</span>
+          </div>
+
+          {/* Tap chips to build a bet / raise */}
+          <div>
+            <p className="text-[11px] text-muted-foreground mb-1.5">{info.toCall > 0 ? "Raise — tap chips to add" : "Bet — tap chips to add"}</p>
+            <div className="flex flex-wrap gap-2">
+              {denoms.map((d) => (
+                <button key={d} type="button" disabled={putIn + d > info.stack}
+                  onClick={() => addChip(d)}
+                  className={`rounded-full ${putIn + d > info.stack ? "opacity-30" : "hover:scale-105 active:scale-95 transition-transform"}`}>
+                  <Chip value={d} size={40} />
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {putIn > 0 && (
+            <div className="rounded-xl bg-black/30 border border-gold-500/20 p-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[11px] text-muted-foreground">Putting in — tap to remove</span>
+                <span className="font-mono font-semibold text-gold-400">{formatChips(putIn)}</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(tray).filter(([, c]) => c > 0).map(([d, c]) => (
+                  <button key={d} type="button" onClick={() => removeChip(Number(d))} className="flex items-center gap-1">
+                    <Chip value={Number(d)} size={30} /><span className="text-[10px] text-muted-foreground">×{c}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-3 gap-2">
             <Button variant="outline" className="border-destructive/40 text-destructive hover:bg-destructive/10" disabled={busy} onClick={() => doAct("fold")}>Fold</Button>
             {info.canCheck
               ? <Button variant="casino" disabled={busy} onClick={() => doAct("check")}>Check</Button>
               : <Button variant="casino" disabled={busy} onClick={() => doAct("call")}>Call {formatChips(info.toCall)}</Button>}
-            <Button variant="gold" disabled={busy || info.maxTo <= state.currentBet} onClick={doRaise}>{state.currentBet === 0 ? "Bet" : "Raise"}</Button>
+            <Button variant="gold" disabled={busy || putIn <= info.toCall} onClick={doBetRaise}>
+              {info.toCall > 0 ? `Raise ${formatChips((meP?.committedRound ?? 0) + putIn)}` : `Bet ${formatChips(putIn)}`}
+            </Button>
           </div>
-          {info.maxTo > state.currentBet && (
-            <div className="space-y-2">
-              <div className="flex gap-2">
-                <Input type="number" inputMode="numeric" min={info.minRaiseTo} max={info.maxTo} value={raiseTo} onChange={(e) => setRaiseTo(e.target.value)} className="flex-1" />
-                <span className="text-xs text-muted-foreground self-center whitespace-nowrap">raise to</span>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button variant="outline" size="sm" onClick={() => setRaiseTo(String(info.minRaiseTo))}>Min</Button>
-                <Button variant="outline" size="sm" onClick={() => setRaiseTo(String(Math.min(info.maxTo, state.currentBet + state.pot)))}>Pot</Button>
-                <Button variant="outline" size="sm" onClick={() => setRaiseTo(String(info.maxTo))}>All-in {formatChips(info.maxTo)}</Button>
-              </div>
-            </div>
-          )}
+          <Button variant="outline" size="sm" className="w-full border-gold-500/30 text-gold-200" disabled={busy} onClick={doAllIn}>
+            All-in {formatChips(info.maxTo)}
+          </Button>
         </div>
       )}
 
