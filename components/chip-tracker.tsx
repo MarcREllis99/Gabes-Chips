@@ -259,6 +259,11 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
     setBlinds({ sb: String(poker.sb / 100), bb: String(poker.bb / 100), ante: String(poker.ante / 100) });
   }, [isPoker, poker.sb, poker.bb, poker.ante]);
 
+  // A new street → drop any half-built bet so tapped counts can't go stale
+  useEffect(() => {
+    if (isPoker) setBetTray({});
+  }, [isPoker, poker.phase]);
+
   const me = members.find((m) => m.user_id === currentUserId);
   const others = members.filter((m) => m.user_id !== currentUserId);
   const amDealer = denomMode && isBlackjack && dealerId === currentUserId;
@@ -581,21 +586,22 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
     setSavingBlinds(false);
   };
   const postBet = async (cents: number) => {
-    if (!Number.isFinite(cents) || cents <= 0) { toast({ title: "Enter an amount", variant: "destructive" }); return; }
+    if (!Number.isFinite(cents) || cents <= 0) { toast({ title: "Select some chips first", variant: "destructive" }); return; }
     const { error } = await supabase.rpc("poker_post", { p_lobby_id: lobby.id, p_cents: Math.round(cents) });
     if (error) { toast({ title: "Bet failed", description: error.message, variant: "destructive" }); return; }
-    setAmount("");
+    setBetTray({});
     await refreshLobby();
   };
   const pokerCheck = async () => {
     const { error } = await supabase.rpc("poker_act", { p_lobby_id: lobby.id, p_action: "check" });
     if (error) { toast({ title: error.message, variant: "destructive" }); return; }
+    setBetTray({});
     await refreshLobby();
   };
   const pokerFold = async () => {
     const { error } = await supabase.rpc("poker_act", { p_lobby_id: lobby.id, p_action: "fold" });
     if (error) { toast({ title: error.message, variant: "destructive" }); return; }
-    setAmount("");
+    setBetTray({});
     await refreshLobby();
   };
   const toggleWinner = (uid: string) => setWinners((w) => (w.includes(uid) ? w.filter((x) => x !== uid) : [...w, uid]));
@@ -889,23 +895,54 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
                           : <span className="text-green-400/80">No bet to call</span>}
                       </div>
 
-                      {/* Bet / raise amount */}
+                      {/* Quick actions that don't need exact chips */}
                       <div className="flex flex-wrap gap-1.5">
                         {toCall > 0 && toCall <= myStackCents && (
                           <Button variant="outline" size="sm" className="border-amber-400/40 text-amber-200" onClick={() => postBet(toCall)}>Call {fmtCents(toCall)}</Button>
                         )}
-                        {poker.bb > 0 && (
-                          <Button variant="outline" size="sm" className="border-gold-500/30 text-gold-200" onClick={() => setAmount(String((toCall + poker.bb) / 100))}>+ BB</Button>
+                        {myStackCents > 0 && (
+                          <Button variant="outline" size="sm" className="border-gold-500/30 text-gold-200" onClick={() => postBet(myStackCents)}>All-in {fmtCents(myStackCents)}</Button>
                         )}
-                        <Button variant="outline" size="sm" className="border-gold-500/30 text-gold-200" onClick={() => setAmount(String(myStackCents / 100))}>All-in</Button>
                       </div>
-                      <div className="flex gap-2">
-                        <Input type="number" inputMode="decimal" min={0} step="0.01" placeholder="Bet / raise to…" value={amount}
-                          onChange={(e) => setAmount(e.target.value)} className="flex-1" />
-                        <Button variant="gold" onClick={() => postBet(Math.round(parseFloat(amount || "0") * 100))} disabled={!amount || parseFloat(amount) <= 0}>
-                          Bet
-                        </Button>
+
+                      {/* Tap your own chips to build a bet / raise */}
+                      <div>
+                        <p className="text-[11px] text-white/60 mb-2">Tap your chips to {toCall > 0 ? "call / raise" : "bet"}</p>
+                        <div className="flex flex-wrap gap-2">
+                          {sortedCounts(myCounts).map(([v]) => {
+                            const avail = betAvail(String(v));
+                            return (
+                              <button key={v} type="button" disabled={avail <= 0}
+                                onClick={() => setBetTray((t) => ({ ...t, [String(v)]: (t[String(v)] ?? 0) + 1 }))}
+                                className={`flex items-center gap-1 rounded-lg px-1.5 py-1 ${avail > 0 ? "hover:bg-black/30 active:scale-95 transition-transform" : "opacity-40"}`}>
+                                <Chip value={v} size={30} /><span className="text-[10px] text-white/70">×{avail}</span>
+                              </button>
+                            );
+                          })}
+                          {sortedCounts(myCounts).length === 0 && (
+                            <span className="text-xs text-white/50">No chips in hand — use Make Change below, Call, or go all-in.</span>
+                          )}
+                        </div>
                       </div>
+
+                      {betCents > 0 && (
+                        <div className="rounded-xl bg-black/30 border border-gold-500/20 p-3">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-[11px] text-white/60">Putting in — tap to remove</span>
+                            <span className="text-gold-400 font-mono font-semibold">{fmtCents(betCents)}</span>
+                          </div>
+                          <div className="flex flex-wrap gap-2 mb-3">
+                            {Object.entries(betTray).filter(([, c]) => c > 0).map(([v, c]) => (
+                              <button key={v} type="button" onClick={() => setBetTray((t) => ({ ...t, [v]: Math.max(0, (t[v] ?? 0) - 1) }))} className="flex items-center gap-1">
+                                <Chip value={Number(v)} size={28} /><span className="text-[10px] text-white/70">×{c}</span>
+                              </button>
+                            ))}
+                          </div>
+                          <Button variant="gold" size="lg" className="w-full" onClick={() => postBet(betCents)}>
+                            Put in {fmtCents(betCents)}{toCall > 0 && betCents > toCall ? " · raise" : toCall > 0 ? " · call" : " · bet"}
+                          </Button>
+                        </div>
+                      )}
 
                       <div className="grid grid-cols-2 gap-2 pt-1">
                         <Button variant="casino" size="lg" onClick={pokerCheck} disabled={iAmReady}>
