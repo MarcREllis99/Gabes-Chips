@@ -8,10 +8,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Toaster } from "@/components/ui/toaster";
 import { useToast } from "@/components/ui/use-toast";
-import { Loader2, Plus, Hand, Zap, Coins, DoorClosed } from "lucide-react";
+import { Loader2, Plus, Hand, Zap, Coins, DoorClosed, SplitSquareHorizontal } from "lucide-react";
 import { formatChips } from "@/lib/utils";
 import {
   type FreeBetState,
+  type FBPlayerHand,
   type FBOutcome,
   initFreeBetTable,
   setBet,
@@ -19,15 +20,18 @@ import {
   dealHand,
   hitPlayer,
   standPlayer,
-  freeDoublePlayer,
+  freeDouble,
   canFreeDouble,
+  splitHand,
+  canSplit,
+  splitIsFree,
+  activeHandIndex,
   allPlayersDone,
   revealDealer,
   resolveDealer,
   nextHand,
   handValue,
   isBlackjack,
-  payoutFor,
   tableBroke,
 } from "@/lib/game-logic/free-bet-blackjack";
 import type { Database } from "@/lib/supabase";
@@ -47,10 +51,9 @@ interface Props {
   onGameEnd: () => void;
 }
 
-const OUTCOME_LABEL: Record<FBOutcome, string> = { win: "WIN", win_double: "WIN ×2", lose: "LOSE", push: "PUSH", blackjack: "BJ 3:2" };
+const OUTCOME_LABEL: Record<FBOutcome, string> = { win: "WIN", lose: "LOSE", push: "PUSH", blackjack: "BJ 3:2" };
 const OUTCOME_CLASS: Record<FBOutcome, string> = {
   win: "text-green-400 bg-green-500/15 border-green-500/40",
-  win_double: "text-green-300 bg-green-500/20 border-green-400/60",
   lose: "text-red-400 bg-red-500/15 border-red-500/40",
   push: "text-yellow-400 bg-yellow-500/15 border-yellow-500/40",
   blackjack: "text-gold-400 bg-gold-500/15 border-gold-500/60",
@@ -58,7 +61,36 @@ const OUTCOME_CLASS: Record<FBOutcome, string> = {
 
 function arcDrop(index: number, count: number): number {
   if (count <= 1) return 0;
-  return Math.round(Math.sin((index / (count - 1)) * Math.PI) * 22);
+  return Math.round(Math.sin((index / (count - 1)) * Math.PI) * 18);
+}
+
+function HandView({ ph, active, size }: { ph: FBPlayerHand; active: boolean; size: "sm" | "md" }) {
+  const value = handValue(ph.hand);
+  const bj = !ph.fromSplit && isBlackjack(ph.hand);
+  return (
+    <div className={`flex flex-col items-center gap-1 rounded-lg p-1 ${active ? "ring-2 ring-gold-400 bg-gold-500/10" : ""}`}>
+      <div className="flex justify-center">
+        {ph.hand.map((card, j) => (
+          <div key={j} className={j > 0 ? (size === "sm" ? "-ml-7" : "-ml-8") : ""}>
+            <PlayingCard rank={card.display} suit={card.suit} size={size} highlight={value === 21} />
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center gap-1 flex-wrap justify-center">
+        <span className={`text-base font-bold leading-none ${value > 21 ? "text-red-400" : value === 21 ? "text-gold-400" : "text-white"}`}>{value}</span>
+        {ph.freeBet > 0 && <span className="text-[9px] font-bold text-green-300 bg-green-400/15 px-1 rounded-full">FREE {ph.doubled ? "2×" : ""}</span>}
+        {ph.outcome ? (
+          <span className={`text-[9px] font-bold border px-1 py-0.5 rounded-full ${OUTCOME_CLASS[ph.outcome]}`}>{OUTCOME_LABEL[ph.outcome]}</span>
+        ) : (
+          <>
+            {bj && <span className="text-[9px] font-bold text-gold-400 bg-gold-400/15 px-1 rounded-full">BJ!</span>}
+            {ph.busted && <span className="text-[9px] font-bold text-red-400 bg-red-400/15 px-1 rounded-full">BUST</span>}
+            {ph.standing && !ph.busted && !bj && ph.freeBet === 0 && <span className="text-[9px] font-bold text-blue-400 bg-blue-400/15 px-1 rounded-full">STAND</span>}
+          </>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function FreeBetGame({ game, lobby, players, currentUser, onGameEnd }: Props) {
@@ -94,10 +126,7 @@ export function FreeBetGame({ game, lobby, players, currentUser, onGameEnd }: Pr
     dealerStarted.current = true;
     const revealed = revealDealer(s);
     await updateState(revealed);
-    setTimeout(async () => {
-      const resolved = resolveDealer(revealed);
-      await updateState(resolved);
-    }, 1800);
+    setTimeout(async () => { await updateState(resolveDealer(revealed)); }, 1800);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [game.id, supabase]);
 
@@ -151,9 +180,11 @@ export function FreeBetGame({ game, lobby, players, currentUser, onGameEnd }: Pr
   const myStack = state.stacks[myId] ?? 0;
   const myBet = state.bets[myId] ?? 0;
   const amSeated = myId !== dealerId && state.playerIds.includes(myId);
-  const myHand = state.hands.find((ph) => ph.playerId === myId);
-  const myDone = myHand ? myHand.standing || myHand.busted : true;
-  const stillPlaying = state.hands.filter((ph) => !ph.standing && !ph.busted);
+  const myHands = state.hands.filter((h) => h.playerId === myId);
+  const myActiveIdx = activeHandIndex(state, myId);
+  const myActive = myActiveIdx >= 0 ? state.hands[myActiveIdx] : null;
+  const myDone = amSeated && myHands.length > 0 && myActiveIdx < 0;
+  const stillPlaying = state.hands.filter((h) => !h.standing && !h.busted);
 
   const dealerRevealed = state.dealerRevealed;
   const dealerValue = handValue(state.dealerHand);
@@ -162,7 +193,10 @@ export function FreeBetGame({ game, lobby, players, currentUser, onGameEnd }: Pr
   const dealer22 = dealerRevealed && dealerValue === 22;
   const dealerBusted = dealerValue > 22;
   const broke = tableBroke(state);
-  const canDbl = myHand ? canFreeDouble(myHand) : false;
+
+  const fdbl = state.phase === "playing" && canFreeDouble(state, myId);
+  const spl = state.phase === "playing" && canSplit(state, myId);
+  const splFree = spl && splitIsFree(state, myId);
 
   const placeBet = async () => {
     const amt = Math.floor(Number(betInput));
@@ -180,17 +214,11 @@ export function FreeBetGame({ game, lobby, players, currentUser, onGameEnd }: Pr
     if (allPlayersDone(dealt)) runDealerSequence(dealt);
   };
 
-  const handleHit = async () => {
-    if (!myHand || actionLoading || state.phase !== "playing" || myDone) return;
-    setActionLoading(true); await updateState(hitPlayer(state, myId)); setActionLoading(false);
-  };
-  const handleStand = async () => {
-    if (!myHand || actionLoading || state.phase !== "playing" || myDone) return;
-    setActionLoading(true); await updateState(standPlayer(state, myId)); setActionLoading(false);
-  };
-  const handleFreeDouble = async () => {
-    if (!myHand || actionLoading || !canDbl) return;
-    setActionLoading(true); await updateState(freeDoublePlayer(state, myId)); setActionLoading(false);
+  const doMove = async (fn: (s: FreeBetState, pid: string) => FreeBetState) => {
+    if (actionLoading || state.phase !== "playing" || myActiveIdx < 0) return;
+    setActionLoading(true);
+    await updateState(fn(state, myId));
+    setActionLoading(false);
   };
 
   const startNextHand = async () => { dealerStarted.current = false; await updateState(nextHand(state)); };
@@ -255,46 +283,28 @@ export function FreeBetGame({ game, lobby, players, currentUser, onGameEnd }: Pr
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/logo.png" alt="Gabe's Chips" className="w-14 h-14 object-contain mb-1" />
           <p className="font-display text-xl sm:text-2xl font-black uppercase logo-gold leading-none">Gabe&apos;s Chips</p>
-          <p className="font-serif text-[11px] sm:text-xs tracking-[0.3em] uppercase text-gold-400/70 mt-2">Free Bet · Double on 9·10·11</p>
-          <p className="text-[10px] tracking-[0.2em] uppercase text-white/40 mt-1">Hand {state.round} · Buy-in {formatChips(state.stake)}</p>
+          <p className="font-serif text-[11px] sm:text-xs tracking-[0.3em] uppercase text-gold-400/70 mt-2">Free Bet · Free double 9·10·11 · Free splits</p>
+          <p className="text-[10px] tracking-[0.2em] uppercase text-white/40 mt-1">Hand {state.round} · Buy-in {formatChips(state.stake)} · Dealer 22 pushes</p>
         </div>
 
         {/* Seats */}
         <div className="flex justify-center items-start gap-2 sm:gap-3 flex-wrap">
           {seatProfiles.map((profile, i) => {
-            const ph = state.hands.find((h) => h.playerId === profile.id);
+            const phs = state.hands.filter((h) => h.playerId === profile.id);
             const isMe = profile.id === myId;
             const stack = state.stacks[profile.id] ?? 0;
             const bet = state.bets[profile.id] ?? 0;
-            const outcome = state.results?.[profile.id] ?? null;
-            const value = ph ? handValue(ph.hand) : 0;
-            const bj = ph ? isBlackjack(ph.hand) : false;
+            const cardSize: "sm" | "md" = phs.length > 1 ? "sm" : "md";
             return (
               <div key={profile.id} style={{ transform: `translateY(${arcDrop(i, seatProfiles.length)}px)` }}
-                className={`flex flex-col items-center gap-1.5 p-2 rounded-xl ${isMe ? "bg-black/35 ring-1 ring-gold-500/60" : "bg-black/20"} ${stack <= 0 && bet <= 0 && !ph ? "opacity-50" : ""}`}>
-                {ph ? (
-                  <>
-                    <div className="flex justify-center">
-                      {ph.hand.map((card, j) => (
-                        <div key={j} className={j > 0 ? "-ml-8" : ""}>
-                          <PlayingCard rank={card.display} suit={card.suit} size="md" highlight={value === 21} />
-                        </div>
-                      ))}
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className={`text-xl font-bold leading-none ${value > 21 ? "text-red-400" : value === 21 ? "text-gold-400" : "text-white"}`}>{value}</span>
-                      {ph.doubled && !outcome && <span className="text-[10px] font-bold text-green-300 bg-green-400/15 px-1.5 py-0.5 rounded-full">2×</span>}
-                      {outcome ? (
-                        <span className={`text-[10px] font-bold border px-1.5 py-0.5 rounded-full ${OUTCOME_CLASS[outcome]}`}>{OUTCOME_LABEL[outcome]}</span>
-                      ) : (
-                        <>
-                          {bj && <span className="text-[10px] font-bold text-gold-400 bg-gold-400/15 px-1.5 py-0.5 rounded-full">BJ!</span>}
-                          {ph.busted && <span className="text-[10px] font-bold text-red-400 bg-red-400/15 px-1.5 py-0.5 rounded-full">BUST</span>}
-                          {ph.standing && !ph.busted && !bj && !ph.doubled && <span className="text-[10px] font-bold text-blue-400 bg-blue-400/15 px-1.5 py-0.5 rounded-full">STAND</span>}
-                        </>
-                      )}
-                    </div>
-                  </>
+                className={`flex flex-col items-center gap-1.5 p-2 rounded-xl ${isMe ? "bg-black/35 ring-1 ring-gold-500/60" : "bg-black/20"} ${stack <= 0 && bet <= 0 && phs.length === 0 ? "opacity-50" : ""}`}>
+                {phs.length > 0 ? (
+                  <div className="flex items-start justify-center gap-1">
+                    {phs.map((ph) => (
+                      <HandView key={state.hands.indexOf(ph)} ph={ph} size={cardSize}
+                        active={state.phase === "playing" && state.hands.indexOf(ph) === activeHandIndex(state, profile.id)} />
+                    ))}
+                  </div>
                 ) : (
                   <div className="h-[7rem] flex items-center justify-center">
                     {bet > 0 ? <span className="text-gold-400 font-mono text-sm">bet {formatChips(bet)}</span> : <span className="text-white/30 text-xs">{stack > 0 ? "no bet" : "out"}</span>}
@@ -303,7 +313,6 @@ export function FreeBetGame({ game, lobby, players, currentUser, onGameEnd }: Pr
                 <PlayerAvatar username={profile.username} userId={profile.id} size="sm" isHost={profile.id === lobby.host_id} />
                 <span className={`text-xs leading-none truncate max-w-[110px] ${isMe ? "text-gold-400 font-semibold" : "text-white/70"}`}>{isMe ? "You" : profile.username}</span>
                 <span className="text-[11px] font-mono text-gold-300/90">{formatChips(stack)}</span>
-                {outcome && <span className="text-[10px] text-white/50 leading-none">{outcome === "lose" ? `−${formatChips(bet)}` : `+${formatChips(payoutFor(outcome, bet) - bet)}`}</span>}
               </div>
             );
           })}
@@ -314,7 +323,7 @@ export function FreeBetGame({ game, lobby, players, currentUser, onGameEnd }: Pr
       {state.phase === "betting" && amSeated && (
         <div className="casino-card p-4 space-y-3">
           <div className="flex items-center justify-between">
-            <span className="text-sm font-semibold">Your bet</span>
+            <span className="text-sm font-semibold">Your bet this hand</span>
             <span className="text-sm text-muted-foreground">Stack <span className="font-mono text-gold-400">{formatChips(myStack)}</span></span>
           </div>
           {myBet > 0 ? (
@@ -341,7 +350,7 @@ export function FreeBetGame({ game, lobby, players, currentUser, onGameEnd }: Pr
         </div>
       )}
 
-      {/* Betting — boss */}
+      {/* Betting — boss deals */}
       {state.phase === "betting" && amBoss && (
         <div className="casino-card p-4 space-y-3">
           <p className="text-sm font-medium text-gold-400">{isDealerMe ? "👑 You're the dealer" : "🎩 You run the table"}</p>
@@ -362,30 +371,35 @@ export function FreeBetGame({ game, lobby, players, currentUser, onGameEnd }: Pr
       )}
 
       {/* Playing — my actions */}
-      {state.phase === "playing" && myHand && (
+      {state.phase === "playing" && myHands.length > 0 && (
         <div className="casino-card p-4">
           {myDone ? (
             <div className="text-center space-y-1">
-              <p className="text-muted-foreground text-sm font-medium">
-                {myHand.busted ? "You busted 💥" : isBlackjack(myHand.hand) ? "Blackjack! Waiting for the dealer…" : myHand.doubled ? "Free double — locked in" : `You're standing on ${handValue(myHand.hand)}`}
-              </p>
-              {stillPlaying.length > 0 && <div className="flex items-center justify-center gap-2 text-muted-foreground text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Waiting for {stillPlaying.length} player{stillPlaying.length > 1 ? "s" : ""}…</div>}
+              <p className="text-muted-foreground text-sm font-medium">You&apos;re all set — waiting for the table.</p>
+              {stillPlaying.length > 0 && <div className="flex items-center justify-center gap-2 text-muted-foreground text-sm"><Loader2 className="w-4 h-4 animate-spin" /> {stillPlaying.length} hand{stillPlaying.length > 1 ? "s" : ""} still in play…</div>}
             </div>
-          ) : (
-            <div className={`grid ${canDbl ? "grid-cols-3" : "grid-cols-2"} gap-3`}>
-              <Button variant="gold" size="lg" onClick={handleHit} disabled={actionLoading || handValue(myHand.hand) >= 21} className="h-16 flex-col gap-1"><Plus className="w-5 h-5" /><span>Hit</span></Button>
-              {canDbl && <Button variant="casino" size="lg" onClick={handleFreeDouble} disabled={actionLoading} className="h-16 flex-col gap-1 border-green-400/60"><Zap className="w-5 h-5 text-green-300" /><span>Free Double</span></Button>}
-              <Button variant="casino" size="lg" onClick={handleStand} disabled={actionLoading} className="h-16 flex-col gap-1"><Hand className="w-5 h-5" /><span>Stand</span></Button>
-            </div>
-          )}
+          ) : myActive ? (
+            <>
+              {myHands.length > 1 && (
+                <p className="text-center text-xs text-gold-400 mb-2">Playing hand {myHands.indexOf(myActive) + 1} of {myHands.length}{myActive.freeBet > 0 ? " · FREE" : ` · bet ${formatChips(myActive.bet)}`}</p>
+              )}
+              <div className={`grid ${fdbl && spl ? "grid-cols-2 sm:grid-cols-4" : fdbl || spl ? "grid-cols-3" : "grid-cols-2"} gap-2`}>
+                <Button variant="gold" size="lg" onClick={() => doMove(hitPlayer)} disabled={actionLoading || handValue(myActive.hand) >= 21} className="h-14 flex-col gap-0.5"><Plus className="w-5 h-5" /><span className="text-xs">Hit</span></Button>
+                <Button variant="casino" size="lg" onClick={() => doMove(standPlayer)} disabled={actionLoading} className="h-14 flex-col gap-0.5"><Hand className="w-5 h-5" /><span className="text-xs">Stand</span></Button>
+                {fdbl && <Button variant="casino" size="lg" onClick={() => doMove(freeDouble)} disabled={actionLoading} className="h-14 flex-col gap-0.5 border-green-400/60"><Zap className="w-5 h-5 text-green-300" /><span className="text-xs">Free Double</span></Button>}
+                {spl && <Button variant="casino" size="lg" onClick={() => doMove(splitHand)} disabled={actionLoading} className="h-14 flex-col gap-0.5 border-green-400/50"><SplitSquareHorizontal className="w-5 h-5" /><span className="text-xs">{splFree ? "Free Split" : "Split"}</span></Button>}
+              </div>
+            </>
+          ) : null}
         </div>
       )}
 
+      {/* Playing — dealer waiting view */}
       {state.phase === "playing" && isDealerMe && (
         <div className="casino-card p-4 text-center">
           <p className="text-sm font-medium text-gold-400">👑 You&apos;re the dealer</p>
-          <p className="text-xs text-muted-foreground mt-1">Dealer 22 pushes all live hands. Your hand plays itself once everyone acts.</p>
-          {stillPlaying.length > 0 && <div className="flex items-center justify-center gap-2 text-muted-foreground text-sm mt-2"><Loader2 className="w-4 h-4 animate-spin" /> Waiting for {stillPlaying.length}…</div>}
+          <p className="text-xs text-muted-foreground mt-1">Dealer 22 pushes all live hands. You bank the free bets. Your hand plays itself once everyone acts.</p>
+          {stillPlaying.length > 0 && <div className="flex items-center justify-center gap-2 text-muted-foreground text-sm mt-2"><Loader2 className="w-4 h-4 animate-spin" /> {stillPlaying.length} in play…</div>}
         </div>
       )}
 
@@ -396,11 +410,6 @@ export function FreeBetGame({ game, lobby, players, currentUser, onGameEnd }: Pr
       {/* Result */}
       {state.phase === "result" && (
         <div className="casino-card p-4 space-y-3 text-center">
-          {amSeated && state.results?.[myId] && (
-            <p className="font-display text-2xl font-black gold-gradient uppercase">
-              {state.results[myId] === "blackjack" ? "Blackjack!" : state.results[myId] === "win_double" ? "Free Double Win!" : state.results[myId] === "win" ? "You win!" : state.results[myId] === "push" ? "Push" : "Dealer wins"}
-            </p>
-          )}
           <p className="text-sm text-muted-foreground">Your stack: <span className="font-mono text-gold-400">{formatChips(myStack)}</span></p>
           {amBoss ? (
             <div className="space-y-2">

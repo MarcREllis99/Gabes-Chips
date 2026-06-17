@@ -1,11 +1,18 @@
-// Free Bet Blackjack: standard blackjack vs the dealer, plus
-// — free double down on hard 9, 10, 11 (the house covers the double)
-// — dealer 22 pushes all live hands instead of busting
-// Free splits are not implemented.
+// Free Bet Blackjack — standard blackjack vs the dealer, with the defining
+// features:
+//   • FREE DOUBLE on hard 9, 10, 11 — the house matches your wager; you win as
+//     if doubled but only risk your original bet.
+//   • FREE SPLIT on any pair except 10-value cards — the house funds the extra
+//     hand(s). 10-value pairs may still be split, but you pay for it.
+//   • Dealer 22 pushes all live hands instead of busting.
+//   • Blackjack pays 3:2.
+//
+// Each hand tracks `bet` (your escrowed chips, at risk) and `freeBet`
+// (house-funded — pays you on a win, costs nothing on a loss).
 //
 // Multi-round bankroll table: each player has a running stack and chooses a
-// wager each hand. A human dealerId (if set) banks the table; otherwise the
-// automated house banks.
+// wager each hand. A human dealerId (if set) banks the table (funding the free
+// bets, offset by 22-pushes); otherwise the automated house banks.
 
 export type Suit = "♠" | "♥" | "♦" | "♣";
 export type CardRank = 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
@@ -16,15 +23,18 @@ export interface FBCard {
   display: string;
 }
 
-// "win_double" = won a free-doubled hand → 3x the wager back (wager + 2x win)
-export type FBOutcome = "win" | "lose" | "push" | "blackjack" | "win_double";
+export type FBOutcome = "win" | "lose" | "push" | "blackjack";
 
 export interface FBPlayerHand {
   playerId: string;
   hand: FBCard[];
+  bet: number;        // your chips on this hand (at risk)
+  freeBet: number;    // house-funded portion (pays on win, free on loss)
   standing: boolean;
   busted: boolean;
   doubled: boolean;
+  fromSplit: boolean; // a split 21 is not a natural blackjack
+  outcome: FBOutcome | null;
 }
 
 export interface FreeBetState {
@@ -34,17 +44,17 @@ export interface FreeBetState {
   dealerId: string | null;
   playerIds: string[];
   stacks: Record<string, number>;
-  bets: Record<string, number>;
+  bets: Record<string, number>;          // opening wager per seated player
   hands: FBPlayerHand[];
   dealerHand: FBCard[];
   dealerRevealed: boolean;
   deck: FBCard[];
-  results: Record<string, FBOutcome> | null;
   ended: boolean;
   rebuyReq: string[];
 }
 
 export const DEALER_STANDS_ON = 17;
+export const MAX_HANDS_PER_PLAYER = 4;
 
 const SUITS: Suit[] = ["♠", "♥", "♦", "♣"];
 const RANK_DISPLAY: Record<CardRank, string> = {
@@ -92,14 +102,6 @@ export function isBusted(hand: FBCard[]): boolean {
   return handValue(hand) > 21;
 }
 
-// Free double: first two cards, no ace, totalling hard 9, 10, or 11
-export function canFreeDouble(ph: FBPlayerHand): boolean {
-  if (ph.standing || ph.busted || ph.hand.length !== 2) return false;
-  if (ph.hand.some((c) => c.rank === 14)) return false;
-  const v = handValue(ph.hand);
-  return v === 9 || v === 10 || v === 11;
-}
-
 // ----- table lifecycle -----
 
 export function initFreeBetTable(playerIds: string[], buyIn: number, dealerId: string | null): FreeBetState {
@@ -108,7 +110,7 @@ export function initFreeBetTable(playerIds: string[], buyIn: number, dealerId: s
   if (dealerId) stacks[dealerId] = buyIn;
   return {
     phase: "betting", stake: buyIn, round: 1, dealerId, playerIds, stacks,
-    bets: {}, hands: [], dealerHand: [], dealerRevealed: false, deck: [], results: null, ended: false, rebuyReq: [],
+    bets: {}, hands: [], dealerHand: [], dealerRevealed: false, deck: [], ended: false, rebuyReq: [],
   };
 }
 
@@ -129,43 +131,121 @@ export function dealHand(state: FreeBetState): FreeBetState {
   const deck = buildDeck();
   const hands: FBPlayerHand[] = bettors.map((playerId) => {
     const hand = [deck.pop()!, deck.pop()!];
-    return { playerId, hand, standing: isBlackjack(hand), busted: false, doubled: false };
+    return { playerId, hand, bet: state.bets[playerId] ?? 0, freeBet: 0, standing: isBlackjack(hand), busted: false, doubled: false, fromSplit: false, outcome: null };
   });
   const dealerHand = [deck.pop()!, deck.pop()!];
-  return { ...state, phase: "playing", deck, hands, dealerHand, dealerRevealed: false, results: null };
+  return { ...state, phase: "playing", deck, hands, dealerHand, dealerRevealed: false };
+}
+
+export function activeHandIndex(state: FreeBetState, playerId: string): number {
+  return state.hands.findIndex((h) => h.playerId === playerId && !h.standing && !h.busted);
 }
 
 export function hitPlayer(state: FreeBetState, playerId: string): FreeBetState {
-  const newDeck = [...state.deck];
-  const newCard = newDeck.pop()!;
-  const newHands = state.hands.map((ph) => {
-    if (ph.playerId !== playerId || ph.standing || ph.busted) return ph;
-    const hand = [...ph.hand, newCard];
+  const i = activeHandIndex(state, playerId);
+  if (i < 0) return state;
+  const deck = [...state.deck];
+  const card = deck.pop()!;
+  const hands = state.hands.map((h, idx) => {
+    if (idx !== i) return h;
+    const hand = [...h.hand, card];
     const busted = isBusted(hand);
-    return { ...ph, hand, busted, standing: busted ? true : ph.standing };
+    return { ...h, hand, busted, standing: busted ? true : h.standing };
   });
-  return { ...state, deck: newDeck, hands: newHands };
+  return { ...state, deck, hands };
 }
 
 export function standPlayer(state: FreeBetState, playerId: string): FreeBetState {
-  return { ...state, hands: state.hands.map((ph) => (ph.playerId === playerId ? { ...ph, standing: true } : ph)) };
+  const i = activeHandIndex(state, playerId);
+  if (i < 0) return state;
+  return { ...state, hands: state.hands.map((h, idx) => (idx === i ? { ...h, standing: true } : h)) };
 }
 
-// One card, then auto-stand — the doubled flag upgrades a win to 3x.
-export function freeDoublePlayer(state: FreeBetState, playerId: string): FreeBetState {
-  const newDeck = [...state.deck];
-  const newCard = newDeck.pop()!;
-  const newHands = state.hands.map((ph) => {
-    if (ph.playerId !== playerId || !canFreeDouble(ph)) return ph;
-    const hand = [...ph.hand, newCard];
+// Free double: only on a hard 9, 10 or 11 (two cards, no ace). The house
+// matches your wager — no chips of yours are risked.
+export function canFreeDouble(state: FreeBetState, playerId: string): boolean {
+  const i = activeHandIndex(state, playerId);
+  if (i < 0) return false;
+  const h = state.hands[i];
+  if (h.hand.length !== 2 || h.doubled) return false;
+  if (h.hand.some((c) => c.rank === 14)) return false; // hard only
+  const v = handValue(h.hand);
+  return v === 9 || v === 10 || v === 11;
+}
+
+export function freeDouble(state: FreeBetState, playerId: string): FreeBetState {
+  const i = activeHandIndex(state, playerId);
+  if (i < 0) return state;
+  const h = state.hands[i];
+  if (!canFreeDouble(state, playerId)) return state;
+  const deck = [...state.deck];
+  const hand = [...h.hand, deck.pop()!];
+  const busted = isBusted(hand);
+  const wager = h.bet + h.freeBet;
+  const hands = state.hands.map((x, idx) => (idx === i ? { ...x, hand, freeBet: x.freeBet + wager, doubled: true, busted, standing: true } : x));
+  return { ...state, deck, hands };
+}
+
+function isTenValue(card: FBCard): boolean {
+  return cardValue(card) === 10;
+}
+
+export function canSplit(state: FreeBetState, playerId: string): boolean {
+  const i = activeHandIndex(state, playerId);
+  if (i < 0) return false;
+  const h = state.hands[i];
+  if (h.hand.length !== 2 || h.hand[0].rank !== h.hand[1].rank) return false;
+  if (state.hands.filter((x) => x.playerId === playerId).length >= MAX_HANDS_PER_PLAYER) return false;
+  // 10-value pairs cost you (a paid split); everything else is free
+  if (isTenValue(h.hand[0])) return (state.stacks[playerId] ?? 0) >= h.bet + h.freeBet;
+  return true;
+}
+
+// Whether splitting the active hand would be a FREE split (house-funded).
+export function splitIsFree(state: FreeBetState, playerId: string): boolean {
+  const i = activeHandIndex(state, playerId);
+  if (i < 0) return false;
+  return !isTenValue(state.hands[i].hand[0]);
+}
+
+export function splitHand(state: FreeBetState, playerId: string): FreeBetState {
+  const i = activeHandIndex(state, playerId);
+  if (i < 0) return state;
+  const h = state.hands[i];
+  if (h.hand.length !== 2 || h.hand[0].rank !== h.hand[1].rank) return state;
+  if (state.hands.filter((x) => x.playerId === playerId).length >= MAX_HANDS_PER_PLAYER) return state;
+
+  const wager = h.bet + h.freeBet;     // this hand's stake
+  const ten = isTenValue(h.hand[0]);
+  if (ten && (state.stacks[playerId] ?? 0) < wager) return state;
+
+  const deck = [...state.deck];
+  const isAces = h.hand[0].rank === 14;
+  // hand A keeps the original stake; hand B is free (or paid, for tens)
+  const handA: FBPlayerHand = (() => {
+    const hand = [h.hand[0], deck.pop()!];
     const busted = isBusted(hand);
-    return { ...ph, hand, busted, standing: true, doubled: true };
-  });
-  return { ...state, deck: newDeck, hands: newHands };
+    return { playerId, hand, bet: h.bet, freeBet: h.freeBet, standing: isAces || busted, busted, doubled: false, fromSplit: true, outcome: null };
+  })();
+  const handB: FBPlayerHand = (() => {
+    const hand = [h.hand[1], deck.pop()!];
+    const busted = isBusted(hand);
+    return {
+      playerId, hand,
+      bet: ten ? wager : 0,
+      freeBet: ten ? 0 : wager,
+      standing: isAces || busted, busted, doubled: false, fromSplit: true, outcome: null,
+    };
+  })();
+
+  const stacks = ten ? { ...state.stacks, [playerId]: (state.stacks[playerId] ?? 0) - wager } : state.stacks;
+  const hands = [...state.hands];
+  hands.splice(i, 1, handA, handB);
+  return { ...state, deck, stacks, hands };
 }
 
 export function allPlayersDone(state: FreeBetState): boolean {
-  return state.hands.every((ph) => ph.standing || ph.busted);
+  return state.hands.every((h) => h.standing || h.busted);
 }
 
 export function revealDealer(state: FreeBetState): FreeBetState {
@@ -179,15 +259,14 @@ export function resolveDealer(state: FreeBetState): FreeBetState {
 
   const dealerBJ = isBlackjack(state.dealerHand);
   const dealerValue = handValue(dealerHand);
-  const dealer22 = dealerValue === 22; // pushes instead of busting
+  const dealer22 = dealerValue === 22;   // pushes instead of busting
   const dealerBusted = dealerValue > 22;
 
-  const results: Record<string, FBOutcome> = {};
   const stacks = { ...state.stacks };
   let dealerNet = 0;
 
-  for (const ph of state.hands) {
-    const playerBJ = isBlackjack(ph.hand);
+  const hands = state.hands.map((ph) => {
+    const playerBJ = !ph.fromSplit && isBlackjack(ph.hand);
     const value = handValue(ph.hand);
     let outcome: FBOutcome;
     if (ph.busted) outcome = "lose";
@@ -195,35 +274,31 @@ export function resolveDealer(state: FreeBetState): FreeBetState {
     else if (playerBJ) outcome = "blackjack";
     else if (dealerBJ) outcome = "lose";
     else if (dealer22) outcome = "push";
-    else if (dealerBusted || value > dealerValue) outcome = ph.doubled ? "win_double" : "win";
+    else if (dealerBusted || value > dealerValue) outcome = "win";
     else if (value < dealerValue) outcome = "lose";
     else outcome = "push";
-    results[ph.playerId] = outcome;
 
-    const bet = state.bets[ph.playerId] ?? 0;
-    const pay = payoutFor(outcome, bet);
+    const pay = payoutFor(outcome, ph.bet, ph.freeBet);
     stacks[ph.playerId] = (stacks[ph.playerId] ?? 0) + pay;
-    dealerNet += bet - pay;
-  }
+    dealerNet += ph.bet - pay;
+    return { ...ph, outcome };
+  });
 
   if (state.dealerId) stacks[state.dealerId] = (stacks[state.dealerId] ?? 0) + dealerNet;
 
-  return { ...state, deck, dealerHand, dealerRevealed: true, phase: "result", results, stacks };
+  return { ...state, deck, dealerHand, dealerRevealed: true, phase: "result", hands, stacks };
 }
 
 export function nextHand(state: FreeBetState): FreeBetState {
-  return {
-    ...state, phase: "betting", round: state.round + 1,
-    bets: {}, hands: [], dealerHand: [], dealerRevealed: false, results: null,
-  };
+  return { ...state, phase: "betting", round: state.round + 1, bets: {}, hands: [], dealerHand: [], dealerRevealed: false };
 }
 
-// Chips returned to the player (the wager was escrowed out of their stack).
-export function payoutFor(outcome: FBOutcome, bet: number): number {
+// Chips returned to the player. The wager (`bet`) was escrowed out of their
+// stack; `freeBet` is house-funded (pays on a win, costs nothing otherwise).
+export function payoutFor(outcome: FBOutcome, bet: number, freeBet: number): number {
   switch (outcome) {
-    case "win_double": return bet * 3;           // wager + 2x free-double win
     case "blackjack": return bet + Math.floor(bet * 1.5);
-    case "win": return bet * 2;
+    case "win": return bet * 2 + freeBet;
     case "push": return bet;
     case "lose": return 0;
   }
