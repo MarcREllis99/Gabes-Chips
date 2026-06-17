@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Toaster } from "@/components/ui/toaster";
 import { useToast } from "@/components/ui/use-toast";
 import {
-  Copy, Check, Loader2, Send, DoorOpen, History, ArrowRight, Dices, RotateCcw,
+  Copy, Check, Loader2, Send, DoorOpen, History, ArrowRight, Dices, RotateCcw, Coins, Repeat,
 } from "lucide-react";
 import { formatChips } from "@/lib/utils";
 import type { Database } from "@/lib/supabase";
@@ -39,6 +39,7 @@ interface TrackerState {
   results: Record<string, Outcome>;
   marked: string[]; // order of marks, for Undo
   lastHand?: HandSnapshot | null; // for Undo after Pay Out
+  ended?: boolean; // dealer closed the table — show the settle-up summary
 }
 interface TransferRow {
   id: string;
@@ -142,6 +143,8 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
   const [winners, setWinners] = useState<string[]>([]); // showdown selection
   const [blinds, setBlinds] = useState({ sb: String(defaultBlinds.sb / 100), bb: String(defaultBlinds.bb / 100), ante: "0" });
   const [savingBlinds, setSavingBlinds] = useState(false);
+  const [changeOpen, setChangeOpen] = useState(false); // "make change" panel
+  const [cashOutOpen, setCashOutOpen] = useState(false);
 
   // denom-mode composer
   const [target, setTarget] = useState<string | null>(null);
@@ -260,6 +263,11 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
   const others = members.filter((m) => m.user_id !== currentUserId);
   const amDealer = denomMode && isBlackjack && dealerId === currentUserId;
   const hasDealer = denomMode && isBlackjack && !!dealerId && members.some((m) => m.user_id === dealerId);
+  // Each player buys in with the configured chip set; net = current value − buy-in.
+  // The dealer banks the house, so their net is the signed bank (lobby_players.chips).
+  const buyInCents = totalCents(startCounts());
+  const netOf = (m: Member) => (m.user_id === dealerId ? m.chips : totalCents(m.chipCounts) - buyInCents);
+  const myNet = me ? netOf(me) : 0;
 
   // Who the chips come from in the composer, and who they go to
   const sourceId = !isBlackjack ? currentUserId : mode === "give" ? currentUserId : target;
@@ -349,6 +357,50 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
   const writeHand = async (next: TrackerState) => {
     setHand(next);
     await supabase.from("lobbies").update({ tracker_state: next as unknown as Record<string, unknown> }).eq("id", lobby.id);
+  };
+
+  // ----- making change (re-denominating your own stack) -----
+  // Greedy: express `cents` using only denominations strictly below `below`.
+  const breakInto = (cents: number, below: number): Record<string, number> | null => {
+    const out: Record<string, number> = {};
+    let rem = cents;
+    for (const v of denomVals) {
+      if (v >= below) continue;
+      const vc = Math.round(v * 100);
+      if (vc <= 0) continue;
+      const n = Math.floor(rem / vc);
+      if (n > 0) { out[String(v)] = n; rem -= n * vc; }
+    }
+    return rem === 0 ? out : null;
+  };
+  const canBreak = (v: number) => breakInto(Math.round(v * 100), v) !== null;
+  const nextLarger = (v: number) =>
+    denomVals.filter((d) => d > v && Math.round(d * 100) % Math.round(v * 100) === 0).sort((a, b) => a - b)[0];
+  const combineNeed = (v: number) => { const w = nextLarger(v); return w ? Math.round(w * 100) / Math.round(v * 100) : 0; };
+  const applyChange = async (counts: Record<string, number>) => {
+    const clean = Object.fromEntries(Object.entries(counts).filter(([, c]) => c > 0));
+    const { error } = await supabase.rpc("recount_chips", { p_lobby_id: lobby.id, p_counts: clean });
+    if (error) { toast({ title: "Couldn't make change", description: error.message, variant: "destructive" }); return; }
+    await loadMembers();
+  };
+  const breakChip = async (v: number) => {
+    const counts = { ...(me?.chipCounts ?? {}) };
+    if ((counts[String(v)] ?? 0) < 1) return;
+    const pieces = breakInto(Math.round(v * 100), v);
+    if (!pieces) { toast({ title: "Can't break that chip into smaller ones", variant: "destructive" }); return; }
+    counts[String(v)] = (counts[String(v)] ?? 0) - 1;
+    for (const [k, c] of Object.entries(pieces)) counts[k] = (counts[k] ?? 0) + c;
+    await applyChange(counts);
+  };
+  const combineChip = async (v: number) => {
+    const w = nextLarger(v);
+    const need = combineNeed(v);
+    if (!w || need <= 0) return;
+    const counts = { ...(me?.chipCounts ?? {}) };
+    if ((counts[String(v)] ?? 0) < need) return;
+    counts[String(v)] = (counts[String(v)] ?? 0) - need;
+    counts[String(w)] = (counts[String(w)] ?? 0) + 1;
+    await applyChange(counts);
   };
 
   const assignDealer = async (pid: string) => {
@@ -476,6 +528,15 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
   const potCents = others.reduce((s, m) => s + (m.betCents > 0 ? m.betCents : 0), 0);
   const allMarked = others.filter((m) => m.betCents > 0).every((m) => hand.results[m.user_id]);
   const anyBet = others.some((m) => m.betCents > 0);
+
+  // Dealer ends the table → everyone sees the up/down settle-up summary.
+  const endGame = async () => writeHand({ ...hand, phase: "idle", results: {}, marked: [], ended: true });
+  const resumeGame = async () => writeHand({ ...hand, ended: false });
+  // A player cashes out: leave the table (their chips drop out of the count).
+  const cashOut = async () => {
+    await supabase.from("lobby_players").delete().eq("lobby_id", lobby.id).eq("user_id", currentUserId);
+    router.push("/");
+  };
 
   // ===== Poker hand flow =====
   const amTableBoss = isPoker && (currentUserId === lobby.host_id || currentUserId === dealerId);
@@ -900,8 +961,41 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
                     )}
                   </div>
 
+                  {/* GAME OVER — settle up */}
+                  {hand.ended && (
+                    <div className="space-y-3">
+                      <div className="text-center">
+                        <p className="font-display text-xl font-black uppercase logo-gold leading-none">Game Over</p>
+                        <p className="text-[11px] text-white/50 mt-1">Settle up outside the app — here&apos;s where everyone stands</p>
+                      </div>
+                      <div className="rounded-xl bg-black/30 border border-gold-500/20 divide-y divide-white/5">
+                        {members.map((m) => {
+                          const net = netOf(m);
+                          const isD = m.user_id === dealerId;
+                          return (
+                            <div key={m.user_id} className="flex items-center justify-between px-3 py-2 text-sm">
+                              <span className="text-white/90 truncate flex items-center gap-1.5">
+                                {isD && "👑"} {m.user_id === currentUserId ? "You" : m.username}{isD && <span className="text-[10px] text-white/40">house</span>}
+                              </span>
+                              <span className={`font-mono font-semibold ${net > 0 ? "text-green-400" : net < 0 ? "text-red-400" : "text-white/50"}`}>
+                                {net > 0 ? "+" : ""}{fmtCents(net)}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {amDealer ? (
+                        <Button variant="outline" size="sm" className="w-full border-gold-500/40 text-gold-300" onClick={resumeGame}>
+                          <RotateCcw className="w-3.5 h-3.5 mr-1.5" /> Resume Game
+                        </Button>
+                      ) : (
+                        <p className="text-center text-[11px] text-white/50">The dealer is paying everyone out.</p>
+                      )}
+                    </div>
+                  )}
+
                   {/* IDLE */}
-                  {hand.phase === "idle" && (amDealer ? (
+                  {!hand.ended && hand.phase === "idle" && (amDealer ? (
                     <div className="space-y-2">
                       <Button variant="gold" size="lg" className="w-full" onClick={newHand}>Deal New Hand</Button>
                       {hand.lastHand && (
@@ -909,13 +1003,16 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
                           <RotateCcw className="w-3.5 h-3.5 mr-1.5" /> Undo Last Hand
                         </Button>
                       )}
+                      <Button variant="outline" size="sm" className="w-full border-destructive/40 text-destructive hover:bg-destructive/10" onClick={endGame}>
+                        End Game &amp; Show Totals
+                      </Button>
                     </div>
                   ) : (
                     <p className="text-center text-sm text-white/60 py-2">Waiting for the dealer to deal a new hand…</p>
                   ))}
 
                   {/* BETTING */}
-                  {hand.phase === "betting" && (
+                  {!hand.ended && hand.phase === "betting" && (
                     <div className="space-y-3">
                       <p className="text-xs font-semibold uppercase tracking-wide text-gold-400/90">Place your bets</p>
                       {amDealer ? (
@@ -974,7 +1071,7 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
                   )}
 
                   {/* PLAYING — dealer resolves */}
-                  {hand.phase === "playing" && (
+                  {!hand.ended && hand.phase === "playing" && (
                     <div className="space-y-3">
                       <div className="rounded-xl bg-black/30 border border-gold-500/20 p-3 text-center">
                         <p className="text-[11px] text-white/60">Pot</p>
@@ -1021,6 +1118,49 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
           )}
         </div>
 
+        {/* Make change — re-denominate your own stack */}
+        {me && !amDealer && sortedCounts(me.chipCounts).length > 0 && (
+          <div className="casino-card p-4">
+            <button type="button" onClick={() => setChangeOpen((o) => !o)} className="w-full flex items-center justify-between">
+              <span className="font-serif text-base font-semibold flex items-center gap-2"><Coins className="w-4 h-4 text-gold-500" /> Make Change</span>
+              <span className="text-xs text-muted-foreground">{changeOpen ? "Hide" : "Break or combine chips"}</span>
+            </button>
+            {changeOpen && (
+              <div className="mt-3 space-y-2">
+                <p className="text-[11px] text-muted-foreground">Swap chips around without changing your total ({fmtCents(totalCents(me.chipCounts))}).</p>
+                {sortedCounts(me.chipCounts).map(([v, c]) => {
+                  const w = nextLarger(v);
+                  const need = combineNeed(v);
+                  const showBreak = canBreak(v);
+                  const showCombine = !!w && need > 0 && c >= need;
+                  if (!showBreak && !showCombine) return null;
+                  return (
+                    <div key={v} className="flex items-center justify-between gap-2 flex-wrap">
+                      <span className="flex items-center gap-1.5"><Chip value={v} size={26} /><span className="text-[11px] text-muted-foreground">×{c}</span></span>
+                      <div className="flex gap-1.5 flex-wrap">
+                        {showBreak && (
+                          <Button variant="outline" size="sm" onClick={() => breakChip(v)}>
+                            <Repeat className="w-3.5 h-3.5 mr-1" /> Break to smaller
+                          </Button>
+                        )}
+                        {showCombine && (
+                          <Button variant="outline" size="sm" onClick={() => combineChip(v)}>
+                            Combine {need}× → {chipLabel(w)}
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                {sortedCounts(me.chipCounts).every(([v, c]) => {
+                  const w = nextLarger(v); const need = combineNeed(v);
+                  return !canBreak(v) && !(w && need > 0 && c >= need);
+                }) && <p className="text-[11px] text-muted-foreground text-center py-1">Nothing to break down or combine right now.</p>}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Transfer log / hand history */}
         <div className="casino-card p-5">
           <h2 className="font-serif text-lg font-semibold mb-3 flex items-center gap-2">
@@ -1062,9 +1202,31 @@ export function ChipTracker({ lobby, currentUserId }: Props) {
           )}
         </div>
 
-        <Button variant="outline" size="lg" className="w-full border-destructive/40 text-destructive hover:bg-destructive/10" onClick={handleLeave}>
-          <DoorOpen className="w-4 h-4 mr-2" /> Leave Tracker
-        </Button>
+        {cashOutOpen ? (
+          <div className="casino-card p-4 space-y-3 text-center">
+            <p className="text-sm">
+              Your net this session:{" "}
+              <span className={`font-mono font-bold ${myNet > 0 ? "text-green-400" : myNet < 0 ? "text-red-400" : "text-muted-foreground"}`}>
+                {myNet > 0 ? "+" : ""}{fmtCents(myNet)}
+              </span>
+            </p>
+            <p className="text-[11px] text-muted-foreground">
+              {amDealer
+                ? "Your bank balance for the table."
+                : `You hold ${fmtCents(totalCents(me?.chipCounts ?? {}))} (bought in for ${fmtCents(buyInCents)}). Settle with the dealer, then leave.`}
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="ghost" onClick={() => setCashOutOpen(false)}>Stay</Button>
+              <Button variant="outline" className="border-destructive/40 text-destructive hover:bg-destructive/10" onClick={cashOut}>
+                <DoorOpen className="w-4 h-4 mr-2" /> Cash Out &amp; Leave
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <Button variant="outline" size="lg" className="w-full border-destructive/40 text-destructive hover:bg-destructive/10" onClick={() => setCashOutOpen(true)}>
+            <DoorOpen className="w-4 h-4 mr-2" /> Cash Out
+          </Button>
+        )}
       </main>
       <Toaster />
     </>
